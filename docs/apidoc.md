@@ -209,3 +209,41 @@ Query a range of records.
   }
 }
 ```
+
+### /api/generate/id
+Generate a unique numeric id key
+
+**Request:**
+```json
+{
+  "Keys": ["orders"]
+}
+```
+
+**Response:**
+```json
+{
+  "Failed": false,
+  "Mesg": "",
+  "Data": "orders:000018"
+}
+```
+
+### /api/generate/hash
+Generate a random hash key
+
+**Request:**
+```json
+{
+  "Keys": ["metrics", "indices"]
+}
+```
+
+**Response:**
+```json
+{
+  "Failed": false,
+  "Mesg": "",
+  "Data": "metrics:indices:cc9d1e617122d8d8"
+}
+```
