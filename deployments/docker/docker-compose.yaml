@@ -1,0 +1,13 @@
+name: quicktable
+services:
+  quicktable:
+    image: ghcr.io/thedevtop/quicktable:latest
+    pull_policy: always
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - qtab-data:/data
+
+volumes:
+  qtab-data:
