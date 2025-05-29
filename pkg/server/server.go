@@ -1,7 +1,9 @@
 package server
 
 import (
+	"crypto/rand"
 	"errors"
+	"fmt"
 
 	"github.com/TheDevtop/quicktable/pkg/shared/core"
 	"github.com/dgraph-io/badger/v4"
@@ -193,4 +195,37 @@ func QueryRanged(dbPtr *badger.DB, key core.Key) (core.Pair, error) {
 		pair[k] = list
 	}
 	return pair, nil
+}
+
+func GenerateId(dbPtr *badger.DB, key core.Key) (core.Key, error) {
+	var newId uint64
+	err := dbPtr.Update(func(txn *badger.Txn) error {
+		var (
+			err error
+			seq *badger.Sequence
+		)
+		if seq, err = dbPtr.GetSequence([]byte(key), 1024); err != nil {
+			return err
+		}
+		defer seq.Release()
+		if newId, err = seq.Next(); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s:%06d", key, newId), nil
+}
+
+func GenerateHash(key core.Key) (core.Key, error) {
+	var (
+		charBuf = make([]byte, 8)
+		err     error
+	)
+	if _, err = rand.Read(charBuf); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s:%x", key, charBuf[:]), nil
 }

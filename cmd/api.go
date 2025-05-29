@@ -170,4 +170,39 @@ var apiTable = map[string]http.HandlerFunc{
 		}
 		shared.EncodeStream(w, shared.Report[core.Pair]{Failed: false, Data: pair})
 	},
+	shared.RouteGenerateId: func(w http.ResponseWriter, r *http.Request) {
+		form, err := shared.DecodeStream[shared.Form](r.Body)
+		if err != nil {
+			log.Println(err)
+			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
+			return
+		}
+		if !core.Constrained(form.Keys) {
+			log.Println(mesgKeyConstrained)
+			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: mesgKeyConstrained, Data: nil})
+			return
+		}
+		if key, err := server.GenerateId(dbPtr, core.Merge(form.Keys)); err != nil {
+			log.Println(err)
+			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
+			return
+		} else {
+			shared.EncodeStream(w, shared.Report[core.Key]{Failed: false, Data: key})
+		}
+	},
+	shared.RouteGenerateHash: func(w http.ResponseWriter, r *http.Request) {
+		form, err := shared.DecodeStream[shared.Form](r.Body)
+		if err != nil {
+			log.Println(err)
+			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
+			return
+		}
+		if key, err := server.GenerateHash(core.Merge(form.Keys)); err != nil {
+			log.Println(err)
+			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
+			return
+		} else {
+			shared.EncodeStream(w, shared.Report[core.Key]{Failed: false, Data: key})
+		}
+	},
 }

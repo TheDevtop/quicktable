@@ -29,4 +29,6 @@ const (
 	RouteDeleteRanged = "/api/delete/ranged"
 	RouteQuery        = "/api/query"
 	RouteQueryRanged  = "/api/query/ranged"
+	RouteGenerateId   = "/api/generate/id"
+	RouteGenerateHash = "/api/generate/hash"
 )
