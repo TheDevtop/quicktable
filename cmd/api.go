@@ -69,6 +69,11 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
 		}
+		if !core.Constrained(form.Keys) {
+			log.Println(mesgKeyConstrained)
+			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: mesgKeyConstrained, Data: nil})
+			return
+		}
 		if keyList, err = server.InsertRanged(dbPtr, core.Merge(form.Keys), form.Values); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
@@ -120,6 +125,11 @@ var apiTable = map[string]http.HandlerFunc{
 		if form, err = shared.DecodeStream[shared.Form](r.Body); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
+			return
+		}
+		if !core.Constrained(form.Keys) {
+			log.Println(mesgKeyConstrained)
+			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: mesgKeyConstrained, Data: nil})
 			return
 		}
 		if err = server.DeleteRanged(dbPtr, core.Merge(form.Keys)); err != nil {
