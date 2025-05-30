@@ -211,13 +211,11 @@ Query a range of records.
 ```
 
 ### /api/generate/id
-Generate a unique numeric id key
+Generate a unique numeric id key.
 
 **Request:**
 ```json
-{
-  "Keys": ["orders"]
-}
+["orders"]
 ```
 
 **Response:**
@@ -230,13 +228,11 @@ Generate a unique numeric id key
 ```
 
 ### /api/generate/hash
-Generate a random hash key
+Generate a random hash key.
 
 **Request:**
 ```json
-{
-  "Keys": ["metrics", "indices"]
-}
+["metrics", "indices"]
 ```
 
 **Response:**
@@ -245,5 +241,43 @@ Generate a random hash key
   "Failed": false,
   "Mesg": "",
   "Data": "metrics:indices:cc9d1e617122d8d8"
+}
+```
+
+### /api/generate/key
+Merge list into key.
+
+**Request:**
+```json
+["cities", "nl"]
+```
+
+**Response:**
+```json
+{
+  "Failed": false,
+  "Mesg": "",
+  "Data": "cities:nl"
+}
+```
+
+### /api/generate/list
+Expand key into list.
+
+**Request:**
+```json
+"cities:nl:gd"
+```
+
+**Response:**
+```json
+{
+  "Failed": false,
+  "Mesg": "",
+  "Data": [
+    "cities",
+    "nl",
+    "gd"
+  ]
 }
 ```

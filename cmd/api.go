@@ -181,18 +181,18 @@ var apiTable = map[string]http.HandlerFunc{
 		shared.EncodeStream(w, shared.Report[core.Pair]{Failed: false, Data: pair})
 	},
 	shared.RouteGenerateId: func(w http.ResponseWriter, r *http.Request) {
-		form, err := shared.DecodeStream[shared.Form](r.Body)
+		form, err := shared.DecodeStream[core.List](r.Body)
 		if err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
 		}
-		if !core.Constrained(form.Keys) {
+		if !core.Constrained(form) {
 			log.Println(mesgKeyConstrained)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: mesgKeyConstrained, Data: nil})
 			return
 		}
-		if key, err := server.GenerateId(dbPtr, core.Merge(form.Keys)); err != nil {
+		if key, err := server.GenerateId(dbPtr, core.Merge(form)); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -201,18 +201,36 @@ var apiTable = map[string]http.HandlerFunc{
 		}
 	},
 	shared.RouteGenerateHash: func(w http.ResponseWriter, r *http.Request) {
-		form, err := shared.DecodeStream[shared.Form](r.Body)
+		form, err := shared.DecodeStream[core.List](r.Body)
 		if err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
 		}
-		if key, err := server.GenerateHash(core.Merge(form.Keys)); err != nil {
+		if key, err := server.GenerateHash(core.Merge(form)); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
 		} else {
 			shared.EncodeStream(w, shared.Report[core.Key]{Failed: false, Data: key})
 		}
+	},
+	shared.RouteGenerateKey: func(w http.ResponseWriter, r *http.Request) {
+		form, err := shared.DecodeStream[core.List](r.Body)
+		if err != nil {
+			log.Println(err)
+			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
+			return
+		}
+		shared.EncodeStream(w, shared.Report[core.Key]{Failed: false, Data: core.Merge(form)})
+	},
+	shared.RouteGenerateList: func(w http.ResponseWriter, r *http.Request) {
+		form, err := shared.DecodeStream[core.Key](r.Body)
+		if err != nil {
+			log.Println(err)
+			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
+			return
+		}
+		shared.EncodeStream(w, shared.Report[core.List]{Failed: false, Data: core.Expand(form)})
 	},
 }

@@ -31,4 +31,6 @@ const (
 	RouteQueryRanged  = "/api/query/ranged"
 	RouteGenerateId   = "/api/generate/id"
 	RouteGenerateHash = "/api/generate/hash"
+	RouteGenerateKey  = "/api/generate/key"
+	RouteGenerateList = "/api/generate/list"
 )
