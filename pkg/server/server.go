@@ -65,28 +65,26 @@ func InsertRanged(dbPtr *badger.DB, key core.Key, values core.List) ([]core.Key,
 		return nil, err
 	}
 
-	// Get all the keys
-	dbPtr.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
+	err = dbPtr.Update(func(txn *badger.Txn) error {
+		var (
+			opts = badger.DefaultIteratorOptions
+			it   *badger.Iterator
+			err  error
+		)
 		opts.PrefetchValues = false
-
-		it := txn.NewIterator(opts)
-		defer it.Close()
+		it = txn.NewIterator(opts)
 
 		for it.Seek([]byte(key)); it.ValidForPrefix([]byte(key)); it.Next() {
 			keyList = append(keyList, core.Key(it.Item().Key()))
 		}
-		return nil
-	})
+		it.Close()
 
-	// Update all the values
-	err = dbPtr.Update(func(txn *badger.Txn) error {
-		var err error
 		for _, k := range keyList {
 			err = txn.Set([]byte(k), buf)
 		}
 		return err
 	})
+
 	return keyList, err
 }
 
