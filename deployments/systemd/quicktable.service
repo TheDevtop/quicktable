@@ -1,0 +1,12 @@
+[Unit]
+Description=Quicktable
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/quicktable
+Restart=always
+Environment="QTAB_ADDR=:8080"
+Environment="QTAB_PATH=/var/lib/quicktable/"
+
+[Install]
+WantedBy=multi-user.target
