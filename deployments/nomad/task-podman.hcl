@@ -5,6 +5,7 @@ job "quicktable" {
         network {
             mode = "cni/fabric"
             port "http" {
+                static = 8080
                 to = 8080
             }
         }
@@ -14,7 +15,7 @@ job "quicktable" {
             source = "quicktable-data"
         }
         task "quicktable" {
-            driver = "docker"
+            driver = "podman"
             config {
                 image = "ghcr.io/thedevtop/quicktable:latest"
                 ports = ["http"]
