@@ -196,25 +196,19 @@ func QueryRanged(dbPtr *badger.DB, key core.Key) (core.Pair, error) {
 }
 
 func GenerateId(dbPtr *badger.DB, key core.Key) (core.Key, error) {
-	var newId uint64
-	err := dbPtr.Update(func(txn *badger.Txn) error {
-		var (
-			err error
-			seq *badger.Sequence
-		)
-		if seq, err = dbPtr.GetSequence([]byte(key), 1024); err != nil {
-			return err
-		}
-		defer seq.Release()
-		if newId, err = seq.Next(); err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
+	var (
+		id  uint64
+		err error
+		seq *badger.Sequence
+	)
+	if seq, err = dbPtr.GetSequence([]byte(key), 64); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s:%06d", key, newId), nil
+	defer seq.Release()
+	if id, err = seq.Next(); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s:%05d", key, id), nil
 }
 
 func GenerateHash(key core.Key) (core.Key, error) {
