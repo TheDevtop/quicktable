@@ -2,7 +2,6 @@ package server
 
 import (
 	"crypto/rand"
-	"errors"
 	"fmt"
 
 	"github.com/TheDevtop/quicktable/pkg/shared/core"
@@ -240,7 +239,7 @@ func QueryRanged(dbPtr *badger.DB, key core.Key) (core.Pair, error) {
 	})
 
 	if len(keyList) != len(bufList) {
-		return nil, errors.New("Mismatch in keys/values")
+		return nil, fmt.Errorf("Mismatch is key/value sizes")
 	}
 	for i, k := range keyList {
 		if list, err = decodeList(bufList[i]); err != nil {
