@@ -76,6 +76,7 @@ func sigHandler() {
 	os.Exit(0)
 }
 
+// Program entrypoint
 func main() {
 	log.Println("\033[97;1mQuicktable\033[0m")
 	startDatabase()

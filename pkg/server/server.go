@@ -9,6 +9,7 @@ import (
 	"github.com/dgraph-io/badger/v4"
 )
 
+// Locate an existing key
 func Index(dbPtr *badger.DB, key core.Key) (core.Key, error) {
 	var err = dbPtr.View(func(txn *badger.Txn) error {
 		if item, err := txn.Get([]byte(key)); err != nil {
@@ -21,6 +22,7 @@ func Index(dbPtr *badger.DB, key core.Key) (core.Key, error) {
 	return key, err
 }
 
+// Locate a range of keys
 func IndexRanged(dbPtr *badger.DB, key core.Key) []core.Key {
 	var keyList = make([]core.Key, 0, 64)
 	dbPtr.View(func(txn *badger.Txn) error {
@@ -38,6 +40,7 @@ func IndexRanged(dbPtr *badger.DB, key core.Key) []core.Key {
 	return keyList
 }
 
+// Insert a record and key
 func Insert(dbPtr *badger.DB, key core.Key, values core.List) (core.Key, error) {
 	var (
 		buf []byte
@@ -55,6 +58,7 @@ func Insert(dbPtr *badger.DB, key core.Key, values core.List) (core.Key, error) 
 	return key, nil
 }
 
+// Insert a record over a range of keys
 func InsertRanged(dbPtr *badger.DB, key core.Key, values core.List) ([]core.Key, error) {
 	var (
 		keyList = make([]core.Key, 0, 64)
@@ -88,6 +92,7 @@ func InsertRanged(dbPtr *badger.DB, key core.Key, values core.List) ([]core.Key,
 	return keyList, err
 }
 
+// Append values to an existing record
 func Append(dbPtr *badger.DB, key core.Key, values core.List) (core.Key, error) {
 	err := dbPtr.Update(func(txn *badger.Txn) error {
 		var (
@@ -118,6 +123,7 @@ func Append(dbPtr *badger.DB, key core.Key, values core.List) (core.Key, error) 
 	return key, err
 }
 
+// Move a record to a new key
 func Move(dbPtr *badger.DB, oldKey core.Key, newKey core.Key) (core.Key, error) {
 	err := dbPtr.Update(func(txn *badger.Txn) error {
 		var (
@@ -142,6 +148,7 @@ func Move(dbPtr *badger.DB, oldKey core.Key, newKey core.Key) (core.Key, error) 
 	return newKey, err
 }
 
+// Delete a record
 func Delete(dbPtr *badger.DB, key core.Key) (core.Key, error) {
 	var err = dbPtr.Update(func(txn *badger.Txn) error {
 		return txn.Delete([]byte(key))
@@ -152,10 +159,12 @@ func Delete(dbPtr *badger.DB, key core.Key) (core.Key, error) {
 	return key, nil
 }
 
+// Delete a range of records
 func DeleteRanged(dbPtr *badger.DB, key core.Key) error {
 	return dbPtr.DropPrefix([]byte(key))
 }
 
+// Query for a record
 func Query(dbPtr *badger.DB, key core.Key) (core.List, error) {
 	var (
 		buf []byte
@@ -182,6 +191,7 @@ func Query(dbPtr *badger.DB, key core.Key) (core.List, error) {
 	return decodeList(buf)
 }
 
+// Query for a range of records
 func QueryRanged(dbPtr *badger.DB, key core.Key) (core.Pair, error) {
 	var (
 		bufList [][]byte   = make([][]byte, 0, 64)
@@ -219,6 +229,7 @@ func QueryRanged(dbPtr *badger.DB, key core.Key) (core.Pair, error) {
 	return pair, nil
 }
 
+// Generate a sequential numeric key
 func GenerateId(dbPtr *badger.DB, key core.Key) (core.Key, error) {
 	var (
 		id  uint64
@@ -235,6 +246,7 @@ func GenerateId(dbPtr *badger.DB, key core.Key) (core.Key, error) {
 	return fmt.Sprintf("%s:%05d", key, id), nil
 }
 
+// Generate a random hashed key
 func GenerateHash(key core.Key) (core.Key, error) {
 	var (
 		charBuf = make([]byte, 8)

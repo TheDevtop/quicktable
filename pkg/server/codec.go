@@ -7,6 +7,7 @@ import (
 	"github.com/TheDevtop/quicktable/pkg/shared/core"
 )
 
+// Serialize list
 func encodeList(list core.List) ([]byte, error) {
 	var (
 		buf bytes.Buffer
@@ -19,6 +20,7 @@ func encodeList(list core.List) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Deserialize list
 func decodeList(buf []byte) (core.List, error) {
 	var (
 		ibuf = bytes.NewBuffer(buf)
