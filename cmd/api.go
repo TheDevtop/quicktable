@@ -16,7 +16,7 @@ var apiTable = map[string]http.HandlerFunc{
 		shared.EncodeStream(w, "pong!")
 	},
 	shared.RouteIndex: func(w http.ResponseWriter, r *http.Request) {
-		form, err := shared.DecodeStream[shared.Form](r.Body)
+		form, err := shared.DecodeStream[shared.KeyForm](r.Body)
 		if err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
@@ -31,7 +31,7 @@ var apiTable = map[string]http.HandlerFunc{
 		}
 	},
 	shared.RouteIndexRanged: func(w http.ResponseWriter, r *http.Request) {
-		form, err := shared.DecodeStream[shared.Form](r.Body)
+		form, err := shared.DecodeStream[shared.KeyForm](r.Body)
 		if err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
@@ -119,11 +119,11 @@ var apiTable = map[string]http.HandlerFunc{
 	},
 	shared.RouteDelete: func(w http.ResponseWriter, r *http.Request) {
 		var (
-			form shared.Form
+			form shared.KeyForm
 			err  error
 			key  core.Key
 		)
-		if form, err = shared.DecodeStream[shared.Form](r.Body); err != nil {
+		if form, err = shared.DecodeStream[shared.KeyForm](r.Body); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -137,10 +137,10 @@ var apiTable = map[string]http.HandlerFunc{
 	},
 	shared.RouteDeleteRanged: func(w http.ResponseWriter, r *http.Request) {
 		var (
-			form shared.Form
+			form shared.KeyForm
 			err  error
 		)
-		if form, err = shared.DecodeStream[shared.Form](r.Body); err != nil {
+		if form, err = shared.DecodeStream[shared.KeyForm](r.Body); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -159,11 +159,11 @@ var apiTable = map[string]http.HandlerFunc{
 	},
 	shared.RouteQuery: func(w http.ResponseWriter, r *http.Request) {
 		var (
-			form shared.Form
+			form shared.KeyForm
 			err  error
 			list core.List
 		)
-		if form, err = shared.DecodeStream[shared.Form](r.Body); err != nil {
+		if form, err = shared.DecodeStream[shared.KeyForm](r.Body); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -177,11 +177,11 @@ var apiTable = map[string]http.HandlerFunc{
 	},
 	shared.RouteQueryRanged: func(w http.ResponseWriter, r *http.Request) {
 		var (
-			form shared.Form
+			form shared.KeyForm
 			err  error
 			pair core.Pair
 		)
-		if form, err = shared.DecodeStream[shared.Form](r.Body); err != nil {
+		if form, err = shared.DecodeStream[shared.KeyForm](r.Body); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return

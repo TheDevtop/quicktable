@@ -9,10 +9,15 @@ type Report[T any] struct {
 	Data   T      `json:"data"`
 }
 
-// Input form
+// Regular form
 type Form = struct {
 	Keys   core.List `json:"keys"`
 	Values core.List `json:"values"`
+}
+
+// Keys form
+type KeyForm = struct {
+	Keys core.List `json:"keys"`
 }
 
 // API routes
