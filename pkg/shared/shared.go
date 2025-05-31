@@ -4,15 +4,15 @@ import "github.com/TheDevtop/quicktable/pkg/shared/core"
 
 // Generic report form
 type Report[T any] struct {
-	Failed bool
-	Mesg   string
-	Data   T
+	Failed bool   `json:"failed"`
+	Mesg   string `json:"mesg"`
+	Data   T      `json:"data"`
 }
 
 // Input form
 type Form = struct {
-	Keys   core.List
-	Values core.List
+	Keys   core.List `json:"keys"`
+	Values core.List `json:"values"`
 }
 
 // API routes

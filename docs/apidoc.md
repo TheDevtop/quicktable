@@ -14,16 +14,16 @@ Returns the exact key if it exists.
 **Request:**
 ```json
 {
-  "Keys": ["hotels", "trivago"]
+  "keys": ["hotels", "trivago"]
 }
 ```
 
 **Response:**
 ```json
 {
-  "Failed": false,
-  "Mesg": "",
-  "Data": "hotels:trivago"
+  "failed": false,
+  "mesg": "",
+  "data": "hotels:trivago"
 }
 ```
 
@@ -33,16 +33,16 @@ Returns a range based on keys.
 **Request:**
 ```json
 {
-  "Keys": ["hotels"]
+  "keys": ["hotels"]
 }
 ```
 
 **Response:**
 ```json
 {
-  "Failed": false,
-  "Mesg": "",
-  "Data": [
+  "failed": false,
+  "mesg": "",
+  "data": [
     "hotels:hilton",
     "hotels:trivago",
     "hotels:vdvalk",
@@ -57,17 +57,17 @@ Insert record with key.
 **Request:**
 ```json
 {
-  "Keys": ["hotels", "walast"],
-  "Values": ["New York", "Amsterdam", "Dubai"]
+  "keys": ["hotels", "walast"],
+  "values": ["New York", "Amsterdam", "Dubai"]
 }
 ```
 
 **Response:**
 ```json
 {
-  "Failed": false,
-  "Mesg": "",
-  "Data": "hotels:walast"
+  "failed": false,
+  "mesg": "",
+  "data": "hotels:walast"
 }
 ```
 
@@ -77,17 +77,17 @@ Insert records on range.
 **Request:**
 ```json
 {
-  "Keys": ["hotels"],
-  "Values": ["Las Vegas"]
+  "keys": ["hotels"],
+  "values": ["Las Vegas"]
 }
 ```
 
 **Response:**
 ```json
 {
-  "Failed": false,
-  "Mesg": "",
-  "Data": [
+  "failed": false,
+  "mesg": "",
+  "data": [
     "hotels:hilton",
     "hotels:trivago",
     "hotels:vdvalk",
@@ -102,17 +102,17 @@ Append values to record.
 **Request:**
 ```json
 {
-  "Keys": ["hotels", "hilton"],
-  "Values": ["Singapore", "Tokyo"]
+  "keys": ["hotels", "hilton"],
+  "values": ["Singapore", "Tokyo"]
 }
 ```
 
 **Response:**
 ```json
 {
-  "Failed": false,
-  "Mesg": "",
-  "Data": "hotels:hilton"
+  "failed": false,
+  "mesg": "",
+  "data": "hotels:hilton"
 }
 ```
 
@@ -122,16 +122,16 @@ Delete exactly one record.
 **Request:**
 ```json
 {
-  "Keys": ["hotels", "trivago"]
+  "keys": ["hotels", "trivago"]
 }
 ```
 
 **Response:**
 ```json
 {
-  "Failed": false,
-  "Mesg": "",
-  "Data": "hotels:trivago"
+  "failed": false,
+  "mesg": "",
+  "data": "hotels:trivago"
 }
 ```
 
@@ -141,16 +141,16 @@ Delete a range of records
 **Request:**
 ```json
 {
-  "Keys": ["hotels"]
+  "keys": ["hotels"]
 }
 ```
 
 **Response:**
 ```json
 {
-  "Failed": false,
-  "Mesg": "",
-  "Data": null
+  "failed": false,
+  "mesg": "",
+  "data": null
 }
 ```
 
@@ -160,16 +160,16 @@ Query an exact record.
 **Request:**
 ```json
 {
-  "Keys": ["cities", "nl", "gd"]
+  "keys": ["cities", "nl", "gd"]
 }
 ```
 
 **Response:**
 ```json
 {
-  "Failed": false,
-  "Mesg": "",
-  "Data": [
+  "failed": false,
+  "mesg": "",
+  "data": [
     "Zutphen",
     "Nijmegen",
     "Arnhem",
@@ -184,16 +184,16 @@ Query a range of records.
 **Request:**
 ```json
 {
-  "Keys": ["cities", "nl"]
+  "keys": ["cities", "nl"]
 }
 ```
 
 **Response:**
 ```json
 {
-  "Failed": false,
-  "Mesg": "",
-  "Data": {
+  "failed": false,
+  "mesg": "",
+  "data": {
     "cities:nl:gd": [
       "Zutphen",
       "Nijmegen",
@@ -221,9 +221,9 @@ Generate a unique numeric id key.
 **Response:**
 ```json
 {
-  "Failed": false,
-  "Mesg": "",
-  "Data": "orders:000018"
+  "failed": false,
+  "mesg": "",
+  "data": "orders:000018"
 }
 ```
 
@@ -238,9 +238,9 @@ Generate a random hash key.
 **Response:**
 ```json
 {
-  "Failed": false,
-  "Mesg": "",
-  "Data": "metrics:indices:cc9d1e617122d8d8"
+  "failed": false,
+  "mesg": "",
+  "data": "metrics:indices:cc9d1e617122d8d8"
 }
 ```
 
@@ -255,9 +255,9 @@ Merge list into key.
 **Response:**
 ```json
 {
-  "Failed": false,
-  "Mesg": "",
-  "Data": "cities:nl"
+  "failed": false,
+  "mesg": "",
+  "data": "cities:nl"
 }
 ```
 
@@ -272,9 +272,9 @@ Expand key into list.
 **Response:**
 ```json
 {
-  "Failed": false,
-  "Mesg": "",
-  "Data": [
+  "failed": false,
+  "mesg": "",
+  "data": [
     "cities",
     "nl",
     "gd"
