@@ -22,7 +22,7 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
 		}
-		if key, err := server.Index(dbPtr, core.Merge(form.Keys)); err != nil {
+		if key, err := server.Index(dbPtr, core.Merge(form.Keys...)); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -37,7 +37,7 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
 		}
-		keys := server.IndexRanged(dbPtr, core.Merge(form.Keys))
+		keys := server.IndexRanged(dbPtr, core.Merge(form.Keys...))
 		shared.EncodeStream(w, shared.Report[[]core.Key]{Failed: false, Data: keys})
 	},
 	shared.RouteInsert: func(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +51,7 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
 		}
-		if key, err = server.Insert(dbPtr, core.Merge(form.Keys), form.Values); err != nil {
+		if key, err = server.Insert(dbPtr, core.Merge(form.Keys...), form.Values); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -74,7 +74,7 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: mesgKeyConstrained, Data: nil})
 			return
 		}
-		if keyList, err = server.InsertRanged(dbPtr, core.Merge(form.Keys), form.Values); err != nil {
+		if keyList, err = server.InsertRanged(dbPtr, core.Merge(form.Keys...), form.Values); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -92,7 +92,7 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
 		}
-		if key, err = server.Append(dbPtr, core.Merge(form.Keys), form.Values); err != nil {
+		if key, err = server.Append(dbPtr, core.Merge(form.Keys...), form.Values); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -110,7 +110,7 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
 		}
-		if key, err = server.Copy(dbPtr, core.Merge(form.Keys), core.Merge(form.Values)); err != nil {
+		if key, err = server.Copy(dbPtr, core.Merge(form.Keys...), core.Merge(form.Values...)); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -128,7 +128,7 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
 		}
-		if key, err = server.Move(dbPtr, core.Merge(form.Keys), core.Merge(form.Values)); err != nil {
+		if key, err = server.Move(dbPtr, core.Merge(form.Keys...), core.Merge(form.Values...)); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -146,7 +146,7 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
 		}
-		if key, err = server.Delete(dbPtr, core.Merge(form.Keys)); err != nil {
+		if key, err = server.Delete(dbPtr, core.Merge(form.Keys...)); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -168,7 +168,7 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: mesgKeyConstrained, Data: nil})
 			return
 		}
-		if err = server.DeleteRanged(dbPtr, core.Merge(form.Keys)); err != nil {
+		if err = server.DeleteRanged(dbPtr, core.Merge(form.Keys...)); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -186,7 +186,7 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
 		}
-		if list, err = server.Query(dbPtr, core.Merge(form.Keys)); err != nil {
+		if list, err = server.Query(dbPtr, core.Merge(form.Keys...)); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -209,7 +209,7 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: mesgKeyConstrained, Data: nil})
 			return
 		}
-		if pair, err = server.QueryRanged(dbPtr, core.Merge(form.Keys)); err != nil {
+		if pair, err = server.QueryRanged(dbPtr, core.Merge(form.Keys...)); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -228,7 +228,7 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: mesgKeyConstrained, Data: nil})
 			return
 		}
-		if key, err := server.GenerateId(dbPtr, core.Merge(form)); err != nil {
+		if key, err := server.GenerateId(dbPtr, core.Merge(form...)); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -243,7 +243,7 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
 		}
-		if key, err := server.GenerateHash(core.Merge(form)); err != nil {
+		if key, err := server.GenerateHash(core.Merge(form...)); err != nil {
 			log.Println(err)
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
@@ -258,7 +258,7 @@ var apiTable = map[string]http.HandlerFunc{
 			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
 			return
 		}
-		shared.EncodeStream(w, shared.Report[core.Key]{Failed: false, Data: core.Merge(form)})
+		shared.EncodeStream(w, shared.Report[core.Key]{Failed: false, Data: core.Merge(form...)})
 	},
 	shared.RouteGenerateList: func(w http.ResponseWriter, r *http.Request) {
 		form, err := shared.DecodeStream[core.Key](r.Body)

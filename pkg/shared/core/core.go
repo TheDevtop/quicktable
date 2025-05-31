@@ -18,8 +18,8 @@ func Expand(k Key) List {
 }
 
 // Merge list into a single key
-func Merge(l List) Key {
-	return strings.Join(l, Delimiter)
+func Merge(k ...Key) Key {
+	return strings.Join(k, Delimiter)
 }
 
 // Check if list is not practically empty
