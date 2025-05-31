@@ -30,6 +30,7 @@ const (
 	RouteInsert       = "/api/insert"
 	RouteInsertRanged = "/api/insert/ranged"
 	RouteAppend       = "/api/append"
+	RouteCopy         = "/api/copy"
 	RouteMove         = "/api/move"
 	RouteDelete       = "/api/delete"
 	RouteDeleteRanged = "/api/delete/ranged"

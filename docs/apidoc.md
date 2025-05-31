@@ -116,6 +116,26 @@ Append values to record.
 }
 ```
 
+### /api/copy
+Copy a record.
+
+**Request:**
+```json
+{
+  "keys": ["vault", "thijs", "mykey"],
+  "values": ["vault", "shared", "thkey"]
+}
+```
+
+**Response:**
+```json
+{
+  "failed": false,
+  "mesg": "",
+  "data": "vault:shared:thkey"
+}
+```
+
 ### /api/move
 Move record to a new key.
 

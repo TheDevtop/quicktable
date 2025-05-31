@@ -123,29 +123,51 @@ func Append(dbPtr *badger.DB, key core.Key, values core.List) (core.Key, error) 
 	return key, err
 }
 
-// Move a record to a new key
-func Move(dbPtr *badger.DB, oldKey core.Key, newKey core.Key) (core.Key, error) {
+// Copy a record
+func Copy(dbPtr *badger.DB, srcKey core.Key, destKey core.Key) (core.Key, error) {
 	err := dbPtr.Update(func(txn *badger.Txn) error {
 		var (
 			item *badger.Item
 			buf  []byte
 			err  error
 		)
-		if item, err = txn.Get([]byte(oldKey)); err != nil {
+		if item, err = txn.Get([]byte(srcKey)); err != nil {
 			return err
 		}
 		if buf, err = item.ValueCopy(nil); err != nil {
 			return err
 		}
-		if err = txn.Set([]byte(newKey), buf); err != nil {
-			return err
-		}
-		if err = txn.Delete([]byte(oldKey)); err != nil {
+		if err = txn.Set([]byte(destKey), buf); err != nil {
 			return err
 		}
 		return nil
 	})
-	return newKey, err
+	return destKey, err
+}
+
+// Move a record to a new key
+func Move(dbPtr *badger.DB, srcKey core.Key, destKey core.Key) (core.Key, error) {
+	err := dbPtr.Update(func(txn *badger.Txn) error {
+		var (
+			item *badger.Item
+			buf  []byte
+			err  error
+		)
+		if item, err = txn.Get([]byte(srcKey)); err != nil {
+			return err
+		}
+		if buf, err = item.ValueCopy(nil); err != nil {
+			return err
+		}
+		if err = txn.Set([]byte(destKey), buf); err != nil {
+			return err
+		}
+		if err = txn.Delete([]byte(srcKey)); err != nil {
+			return err
+		}
+		return nil
+	})
+	return destKey, err
 }
 
 // Delete a record
