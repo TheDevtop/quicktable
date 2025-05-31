@@ -116,6 +116,26 @@ Append values to record.
 }
 ```
 
+### /api/move
+Move record to a new key.
+
+**Request:**
+```json
+{
+  "keys": ["vault", "02024", "mykey"],
+  "values": ["vault", "02025", "mykey"]
+}
+```
+
+**Response:**
+```json
+{
+  "failed": false,
+  "mesg": "",
+  "data": "vault:02025:mykey"
+}
+```
+
 ### /api/delete
 Delete exactly one record.
 

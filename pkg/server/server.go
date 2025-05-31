@@ -118,6 +118,30 @@ func Append(dbPtr *badger.DB, key core.Key, values core.List) (core.Key, error) 
 	return key, err
 }
 
+func Move(dbPtr *badger.DB, oldKey core.Key, newKey core.Key) (core.Key, error) {
+	err := dbPtr.Update(func(txn *badger.Txn) error {
+		var (
+			item *badger.Item
+			buf  []byte
+			err  error
+		)
+		if item, err = txn.Get([]byte(oldKey)); err != nil {
+			return err
+		}
+		if buf, err = item.ValueCopy(nil); err != nil {
+			return err
+		}
+		if err = txn.Set([]byte(newKey), buf); err != nil {
+			return err
+		}
+		if err = txn.Delete([]byte(oldKey)); err != nil {
+			return err
+		}
+		return nil
+	})
+	return newKey, err
+}
+
 func Delete(dbPtr *badger.DB, key core.Key) (core.Key, error) {
 	var err = dbPtr.Update(func(txn *badger.Txn) error {
 		return txn.Delete([]byte(key))

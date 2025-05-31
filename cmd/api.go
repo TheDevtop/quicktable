@@ -99,6 +99,24 @@ var apiTable = map[string]http.HandlerFunc{
 		}
 		shared.EncodeStream(w, shared.Report[core.Key]{Failed: false, Data: key})
 	},
+	shared.RouteMove: func(w http.ResponseWriter, r *http.Request) {
+		var (
+			form shared.Form
+			err  error
+			key  core.Key
+		)
+		if form, err = shared.DecodeStream[shared.Form](r.Body); err != nil {
+			log.Println(err)
+			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
+			return
+		}
+		if key, err = server.Move(dbPtr, core.Merge(form.Keys), core.Merge(form.Values)); err != nil {
+			log.Println(err)
+			shared.EncodeStream(w, shared.Report[any]{Failed: true, Mesg: err.Error(), Data: nil})
+			return
+		}
+		shared.EncodeStream(w, shared.Report[core.Key]{Failed: false, Data: key})
+	},
 	shared.RouteDelete: func(w http.ResponseWriter, r *http.Request) {
 		var (
 			form shared.Form

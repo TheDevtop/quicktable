@@ -25,6 +25,7 @@ const (
 	RouteInsert       = "/api/insert"
 	RouteInsertRanged = "/api/insert/ranged"
 	RouteAppend       = "/api/append"
+	RouteMove         = "/api/move"
 	RouteDelete       = "/api/delete"
 	RouteDeleteRanged = "/api/delete/ranged"
 	RouteQuery        = "/api/query"
