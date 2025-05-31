@@ -18,6 +18,7 @@ job "quicktable" {
             driver = "podman"
             config {
                 image = "ghcr.io/thedevtop/quicktable:latest"
+                force_pull = true
                 ports = ["http"]
             }
             volume_mount {
