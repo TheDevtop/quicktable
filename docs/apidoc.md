@@ -4,8 +4,8 @@
 Returns pong.
 
 **Response:**
-```json
-"pong!"
+```
+quicktable:pong
 ```
 
 ### /api/index

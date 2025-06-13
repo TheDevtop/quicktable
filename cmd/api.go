@@ -13,7 +13,7 @@ const mesgKeyConstrained = "Key is not constrained"
 
 var apiTable = map[string]http.HandlerFunc{
 	shared.RoutePing: func(w http.ResponseWriter, r *http.Request) {
-		shared.EncodeStream(w, "pong!")
+		w.Write([]byte(shared.Signature))
 	},
 	shared.RouteIndex: func(w http.ResponseWriter, r *http.Request) {
 		form, err := shared.DecodeStream[shared.KeyForm](r.Body)

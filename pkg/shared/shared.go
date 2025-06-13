@@ -20,6 +20,9 @@ type KeyForm = struct {
 	Keys core.List `json:"keys"`
 }
 
+// Ping signature
+const Signature = "quicktable:pong"
+
 // API routes
 const (
 	RoutePing    = "/ping"
