@@ -4,26 +4,26 @@ import (
 	"crypto/rand"
 	"fmt"
 
-	"github.com/TheDevtop/quicktable/pkg/shared/core"
+	"github.com/TheDevtop/quicktable/pkg/dkey"
 	"github.com/dgraph-io/badger/v4"
 )
 
 // Locate an existing key
-func Index(dbPtr *badger.DB, key core.Key) (core.Key, error) {
+func Index(dbPtr *badger.DB, key string) (string, error) {
 	var err = dbPtr.View(func(txn *badger.Txn) error {
 		if item, err := txn.Get([]byte(key)); err != nil {
 			return err
 		} else {
-			key = core.Key(item.Key())
+			key = string(item.Key())
 			return nil
 		}
 	})
 	return key, err
 }
 
-// Locate a range of keys
-func IndexRanged(dbPtr *badger.DB, key core.Key) []core.Key {
-	var keyList = make([]core.Key, 0, 64)
+// Locate a set of keys by prefix
+func IndexPrefixed(dbPtr *badger.DB, key string) []string {
+	var keyList = make([]string, 0, 64)
 	dbPtr.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.PrefetchValues = false
@@ -32,24 +32,18 @@ func IndexRanged(dbPtr *badger.DB, key core.Key) []core.Key {
 		defer it.Close()
 
 		for it.Seek([]byte(key)); it.ValidForPrefix([]byte(key)); it.Next() {
-			keyList = append(keyList, core.Key(it.Item().Key()))
+			keyList = append(keyList, dkey.Strip(key, string(it.Item().Key())))
 		}
 		return nil
 	})
 	return keyList
 }
 
-// Insert a record and key
-func Insert(dbPtr *badger.DB, key core.Key, values core.List) (core.Key, error) {
-	var (
-		buf []byte
-		err error
-	)
-	if buf, err = encodeList(values); err != nil {
-		return "", err
-	}
+// Insert a key/value pair
+func Insert(dbPtr *badger.DB, key, value string) (string, error) {
+	var err error
 	err = dbPtr.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte(key), buf)
+		return txn.Set([]byte(key), []byte(value))
 	})
 	if err != nil {
 		return "", err
@@ -57,73 +51,25 @@ func Insert(dbPtr *badger.DB, key core.Key, values core.List) (core.Key, error) 
 	return key, nil
 }
 
-// Insert a record over a range of keys
-func InsertRanged(dbPtr *badger.DB, key core.Key, values core.List) ([]core.Key, error) {
-	var (
-		keyList = make([]core.Key, 0, 64)
-		buf     []byte
-		err     error
-	)
-	if buf, err = encodeList(values); err != nil {
-		return nil, err
-	}
-
+// Insert prefiltered key/value pairs via prefix
+func InsertPrefiltered(dbPtr *badger.DB, prefix string, pairs map[string]string) error {
+	var err error
 	err = dbPtr.Update(func(txn *badger.Txn) error {
-		var (
-			opts = badger.DefaultIteratorOptions
-			it   *badger.Iterator
-			err  error
-		)
-		opts.PrefetchValues = false
-		it = txn.NewIterator(opts)
-
-		for it.Seek([]byte(key)); it.ValidForPrefix([]byte(key)); it.Next() {
-			keyList = append(keyList, core.Key(it.Item().Key()))
-		}
-		it.Close()
-
-		for _, k := range keyList {
-			err = txn.Set([]byte(k), buf)
+		var err error
+		for key, val := range pairs {
+			err = txn.Set([]byte(dkey.Fuse(prefix, key)), []byte(val))
 		}
 		return err
 	})
 
-	return keyList, err
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
-// Append values to an existing record
-func Append(dbPtr *badger.DB, key core.Key, values core.List) (core.Key, error) {
-	err := dbPtr.Update(func(txn *badger.Txn) error {
-		var (
-			item      *badger.Item
-			oldValues core.List
-			buf       []byte
-			err       error
-		)
-		if item, err = txn.Get([]byte(key)); err != nil {
-			return err
-		}
-		key = core.Key(item.Key())
-		if buf, err = item.ValueCopy(nil); err != nil {
-			return err
-		}
-		if oldValues, err = decodeList(buf); err != nil {
-			return err
-		}
-		values = append(oldValues, values...)
-		if buf, err = encodeList(values); err != nil {
-			return err
-		}
-		if err = txn.Set([]byte(key), buf); err != nil {
-			return err
-		}
-		return nil
-	})
-	return key, err
-}
-
-// Copy a record
-func Copy(dbPtr *badger.DB, srcKey core.Key, destKey core.Key) (core.Key, error) {
+// Copy an existing value to a new key
+func Copy(dbPtr *badger.DB, srcKey string, destKey string) (string, error) {
 	err := dbPtr.Update(func(txn *badger.Txn) error {
 		var (
 			item *badger.Item
@@ -144,8 +90,8 @@ func Copy(dbPtr *badger.DB, srcKey core.Key, destKey core.Key) (core.Key, error)
 	return destKey, err
 }
 
-// Move a record to a new key
-func Move(dbPtr *badger.DB, srcKey core.Key, destKey core.Key) (core.Key, error) {
+// Move an existing value to a new key
+func Move(dbPtr *badger.DB, srcKey string, destKey string) (string, error) {
 	err := dbPtr.Update(func(txn *badger.Txn) error {
 		var (
 			item *badger.Item
@@ -169,8 +115,8 @@ func Move(dbPtr *badger.DB, srcKey core.Key, destKey core.Key) (core.Key, error)
 	return destKey, err
 }
 
-// Delete a record
-func Delete(dbPtr *badger.DB, key core.Key) (core.Key, error) {
+// Delete a key/value pair
+func Delete(dbPtr *badger.DB, key string) (string, error) {
 	var err = dbPtr.Update(func(txn *badger.Txn) error {
 		return txn.Delete([]byte(key))
 	})
@@ -180,13 +126,25 @@ func Delete(dbPtr *badger.DB, key core.Key) (core.Key, error) {
 	return key, nil
 }
 
-// Delete a range of records
-func DeleteRanged(dbPtr *badger.DB, key core.Key) error {
+// Delete prefiltered key/value pairs via prefix
+func DeletePrefiltered(dbPtr *badger.DB, prefix string, keys []string) error {
+	var err = dbPtr.Update(func(txn *badger.Txn) error {
+		var err error
+		for _, key := range keys {
+			err = txn.Delete([]byte(dkey.Fuse(prefix, key)))
+		}
+		return err
+	})
+	return err
+}
+
+// Delete key/value pairs by prefix
+func DeletePrefixed(dbPtr *badger.DB, key string) error {
 	return dbPtr.DropPrefix([]byte(key))
 }
 
-// Query for a record
-func Query(dbPtr *badger.DB, key core.Key) (core.List, error) {
+// Query for key/value pair
+func Query(dbPtr *badger.DB, key string) (string, error) {
 	var (
 		buf []byte
 		err error
@@ -206,69 +164,67 @@ func Query(dbPtr *badger.DB, key core.Key) (core.List, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	return decodeList(buf)
+	return string(buf), nil
 }
 
-// Query for a range of records
-func QueryRanged(dbPtr *badger.DB, key core.Key) (core.Pair, error) {
+// Query prefiltered key/value pairs via prefix
+func QueryPrefiltered(dbPtr *badger.DB, prefix string, keys []string) (map[string]string, error) {
 	var (
-		bufList [][]byte   = make([][]byte, 0, 64)
-		keyList []core.Key = make([]core.Key, 0, 64)
-		err     error
-		list    core.List
-		pair    = make(core.Pair)
+		err   error
+		pairs = make(map[string]string, len(keys))
 	)
 
-	dbPtr.View(func(txn *badger.Txn) error {
+	err = dbPtr.View(func(txn *badger.Txn) error {
+		var (
+			buf []byte
+			err error
+		)
+		for _, key := range keys {
+			item, err := txn.Get([]byte(dkey.Fuse(prefix, key)))
+			if err != nil {
+				pairs[key] = ""
+				continue
+			}
+			buf, err = item.ValueCopy(nil)
+			pairs[key] = string(buf)
+		}
+		return err
+	})
+
+	return pairs, err
+}
+
+// Query key/value pairs via prefix
+func QueryPrefixed(dbPtr *badger.DB, prefix string) (map[string]string, error) {
+	var (
+		err   error
+		pairs = make(map[string]string)
+	)
+
+	err = dbPtr.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		opts.PrefetchValues = true
 
 		it := txn.NewIterator(opts)
 		defer it.Close()
 
-		for it.Seek([]byte(key)); it.ValidForPrefix([]byte(key)); it.Next() {
+		for it.Seek([]byte(prefix)); it.ValidForPrefix([]byte(prefix)); it.Next() {
 			item := it.Item()
-			keyList = append(keyList, core.Key(item.Key()))
-			buf, _ := item.ValueCopy(nil)
-			bufList = append(bufList, buf)
+			key := item.Key()
+			val, _ := item.ValueCopy(nil)
+			pairs[dkey.Strip(prefix, string(key))] = string(val)
 		}
 		return nil
 	})
 
-	if len(keyList) != len(bufList) {
-		return nil, fmt.Errorf("Mismatch is key/value sizes")
-	}
-	for i, k := range keyList {
-		if list, err = decodeList(bufList[i]); err != nil {
-			return nil, err
-		}
-		pair[k] = list
-	}
-	return pair, nil
-}
-
-// Generate a sequential numeric key
-func GenerateId(dbPtr *badger.DB, key core.Key) (core.Key, error) {
-	var (
-		id  uint64
-		err error
-		seq *badger.Sequence
-	)
-	if seq, err = dbPtr.GetSequence([]byte(key), 64); err != nil {
-		return "", err
-	}
-	defer seq.Release()
-	if id, err = seq.Next(); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%s:%05d", key, id), nil
+	return pairs, err
 }
 
 // Generate a random hashed key
-func GenerateHash(key core.Key) (core.Key, error) {
+func GenerateHash(key string) (string, error) {
 	var (
 		charBuf = make([]byte, 8)
 		err     error
