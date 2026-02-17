@@ -1,6 +1,8 @@
 package shared
 
-// Form types
+import "errors"
+
+// API forms
 type (
 	FormResult[T any] = struct {
 		Status int `json:"status"`
@@ -21,4 +23,17 @@ const (
 	RouteHealth = "/api/health"
 	RouteQuery  = "/api/query"
 	RouteHash   = "/api/hash"
+)
+
+// Status codes
+const (
+	StatusEngineError = -2
+	StatusApiError    = -1
+	StatusOk          = 0
+)
+
+// Error messages
+var (
+	ErrInvalidArgs = errors.New("invalid arguments specified")
+	ErrInvalidFn   = errors.New("invalid function specified")
 )

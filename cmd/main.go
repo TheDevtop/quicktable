@@ -1,24 +1,31 @@
 package main
 
+/*
+	Quicktable
+	Program entrypoint
+*/
+
 import (
-	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/TheDevtop/quicktable/pkg/logwrap"
+	"github.com/TheDevtop/quicktable/pkg/shared"
 	badger "github.com/dgraph-io/badger/v4"
 )
 
 // Environment variables
 const (
-	envDefaultPath = "QTAB_PATH"
-	envDefaultAddr = "QTAB_ADDR"
+	envDefaultPath = "QT_PATH"
+	envDefaultAddr = "QT_ADDR"
 )
 
 var (
 	dbPtr  *badger.DB
+	logPtr *logwrap.Logger
 	srvPtr net.Listener
 )
 
@@ -32,14 +39,16 @@ func startDatabase() {
 
 	if path == "" {
 		opts = badger.DefaultOptions("").WithInMemory(true)
-		log.Printf("%s not specified, running in memory\n", envDefaultPath)
+		logPtr.Warnf("%s not specified, running in memory\n", envDefaultPath)
 	} else {
 		opts = badger.DefaultOptions(path)
-		log.Printf("Running at %s\n", path)
+		logPtr.Infof("Running at %s\n", path)
 	}
 
+	opts = opts.WithLogger(logPtr)
+
 	if dbPtr, err = badger.Open(opts); err != nil {
-		log.Fatalf("Fatal error (%s)\n", err)
+		logPtr.Fatalf("Fatal error (%s)\n", err)
 	}
 }
 
@@ -47,12 +56,14 @@ func startDatabase() {
 func startServer() {
 	var err error
 	if srvPtr, err = net.Listen("tcp", os.Getenv(envDefaultAddr)); err != nil {
-		log.Printf("Can't serve on %s (%s)\n", os.Getenv(envDefaultAddr), err)
+		logPtr.Errorf("Can't serve on %s (%s)\n", os.Getenv(envDefaultAddr), err)
 	}
-	for route, fn := range apiTable {
-		http.Handle(route, fn)
-	}
-	log.Printf("Serving on %s\n", os.Getenv(envDefaultAddr))
+
+	http.HandleFunc(shared.RouteHealth, apiHealth)
+	http.HandleFunc(shared.RouteQuery, apiQuery)
+	http.HandleFunc(shared.RouteHash, apiHash)
+
+	logPtr.Infof("Serving on %s\n", os.Getenv(envDefaultAddr))
 }
 
 // Signal handler and shutdown function
@@ -65,25 +76,27 @@ func sigHandler() {
 	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
 	<-ch
 
-	log.Println("Caught signal, halting system")
+	logPtr.Infof("Caught signal, halting system")
 	if err = srvPtr.Close(); err != nil {
-		log.Printf("Error (%s)\n", err)
+		logPtr.Errorf("Error (%s)\n", err)
 	}
 	if err = dbPtr.Close(); err != nil {
-		log.Fatalf("Fatal error (%s)\n", err)
+		logPtr.Fatalf("Fatal error (%s)\n", err)
 	}
-	log.Println("Halted!")
+	logPtr.Infof("Stopped Quicktable\n")
 	os.Exit(0)
 }
 
 // Program entrypoint
 func main() {
-	log.Println("\033[97;1mQuicktable\033[0m")
+	logPtr = logwrap.NewLogger()
+	logPtr.Print("Quicktable")
+
 	startDatabase()
 	startServer()
 	go func() {
 		if err := http.Serve(srvPtr, nil); err != nil {
-			log.Println(err)
+			logPtr.Error(err)
 		}
 	}()
 	sigHandler()
