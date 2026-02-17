@@ -44,6 +44,38 @@ func TestInsert(t *testing.T) {
 	}
 }
 
+func TestCopy(t *testing.T) {
+	var (
+		err error
+		key string
+		ptr *badger.DB
+	)
+
+	if ptr, err = startEngine(); err != nil {
+		t.Fatal(err)
+	}
+
+	if key, err = engine.Insert(ptr, "foo:bar", "content"); err != nil {
+		t.Fatal(err)
+	} else if key != "foo:bar" {
+		t.Fail()
+	}
+
+	if _, err = engine.Copy(ptr, "foo:bar", "foo:baz"); err != nil {
+		t.Fatal(err)
+	}
+
+	if key, err = engine.Index(ptr, "foo:baz"); err != nil {
+		t.Fatal(err)
+	} else if key != "foo:baz" {
+		t.Fail()
+	}
+
+	if err = stopEngine(ptr); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInsertSelected(t *testing.T) {
 	var (
 		err    error
