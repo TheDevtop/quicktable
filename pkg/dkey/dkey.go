@@ -1,5 +1,10 @@
 package dkey
 
+/*
+	Quicktable
+	Support functions for dynamic keys
+*/
+
 import (
 	"strings"
 )

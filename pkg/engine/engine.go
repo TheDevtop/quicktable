@@ -1,4 +1,9 @@
-package server
+package engine
+
+/*
+	Quicktable
+	Database engine
+*/
 
 import (
 	"crypto/rand"
@@ -51,21 +56,16 @@ func Insert(dbPtr *badger.DB, key, value string) (string, error) {
 	return key, nil
 }
 
-// Insert prefiltered key/value pairs via prefix
-func InsertPrefiltered(dbPtr *badger.DB, prefix string, pairs map[string]string) error {
+// Insert pre-selected key/value pairs on prefix
+func InsertSelected(dbPtr *badger.DB, prefix string, pairs map[string]string) error {
 	var err error
 	err = dbPtr.Update(func(txn *badger.Txn) error {
-		var err error
 		for key, val := range pairs {
 			err = txn.Set([]byte(dkey.Fuse(prefix, key)), []byte(val))
 		}
 		return err
 	})
-
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 // Copy an existing value to a new key
@@ -126,8 +126,8 @@ func Delete(dbPtr *badger.DB, key string) (string, error) {
 	return key, nil
 }
 
-// Delete prefiltered key/value pairs via prefix
-func DeletePrefiltered(dbPtr *badger.DB, prefix string, keys []string) error {
+// Delete pre-selected key/value pairs on prefix
+func DeleteSelected(dbPtr *badger.DB, prefix string, keys []string) error {
 	var err = dbPtr.Update(func(txn *badger.Txn) error {
 		var err error
 		for _, key := range keys {
@@ -138,7 +138,7 @@ func DeletePrefiltered(dbPtr *badger.DB, prefix string, keys []string) error {
 	return err
 }
 
-// Delete key/value pairs by prefix
+// Delete key/value pairs on prefix
 func DeletePrefixed(dbPtr *badger.DB, key string) error {
 	return dbPtr.DropPrefix([]byte(key))
 }
@@ -170,8 +170,8 @@ func Query(dbPtr *badger.DB, key string) (string, error) {
 	return string(buf), nil
 }
 
-// Query prefiltered key/value pairs via prefix
-func QueryPrefiltered(dbPtr *badger.DB, prefix string, keys []string) (map[string]string, error) {
+// Query pre-selected key/value pairs on prefix
+func QuerySelected(dbPtr *badger.DB, prefix string, keys []string) (map[string]string, error) {
 	var (
 		err   error
 		pairs = make(map[string]string, len(keys))
@@ -197,7 +197,7 @@ func QueryPrefiltered(dbPtr *badger.DB, prefix string, keys []string) (map[strin
 	return pairs, err
 }
 
-// Query key/value pairs via prefix
+// Query key/value pairs on prefix
 func QueryPrefixed(dbPtr *badger.DB, prefix string) (map[string]string, error) {
 	var (
 		err   error
@@ -215,7 +215,7 @@ func QueryPrefixed(dbPtr *badger.DB, prefix string) (map[string]string, error) {
 			item := it.Item()
 			key := item.Key()
 			val, _ := item.ValueCopy(nil)
-			pairs[dkey.Strip(prefix, string(key))] = string(val)
+			pairs[string(key)] = string(val)
 		}
 		return nil
 	})
@@ -224,7 +224,7 @@ func QueryPrefixed(dbPtr *badger.DB, prefix string) (map[string]string, error) {
 }
 
 // Generate a random hashed key
-func GenerateHash(key string) (string, error) {
+func GenerateHash(prefix string) (string, error) {
 	var (
 		charBuf = make([]byte, 8)
 		err     error
@@ -232,5 +232,5 @@ func GenerateHash(key string) (string, error) {
 	if _, err = rand.Read(charBuf); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s:%x", key, charBuf[:]), nil
+	return fmt.Sprintf("%s:%x", prefix, charBuf[:]), nil
 }
