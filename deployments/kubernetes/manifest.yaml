@@ -33,3 +33,17 @@ spec:
   resources:
     requests:
       storage: 16Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: quicktable
+spec:
+  type: ClusterIP
+  selector:
+    app: quicktable
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8080
+      targetPort: 8080

@@ -1,4 +1,3 @@
-name: quicktable
 services:
   quicktable:
     image: ghcr.io/thedevtop/quicktable:latest
@@ -7,7 +6,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - qtab-data:/data
+      - quicktable_data:/data
 
 volumes:
-  qtab-data:
+  quicktable_data:

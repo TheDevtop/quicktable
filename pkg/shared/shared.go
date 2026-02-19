@@ -1,46 +1,56 @@
 package shared
 
-import "github.com/TheDevtop/quicktable/pkg/shared/core"
+import "errors"
 
-// Generic report form
-type Report[T any] struct {
-	Failed bool   `json:"failed"`
-	Mesg   string `json:"mesg"`
-	Data   T      `json:"data"`
-}
+// API forms
+type (
+	FormResult[T any] = struct {
+		Status int `json:"status"`
+		Data   T   `json:"data"`
+	}
 
-// Regular form
-type Form = struct {
-	Keys   core.List `json:"keys"`
-	Values core.List `json:"values"`
-}
+	FormQuery = struct {
+		Fn   string `json:"fn"`
+		Args []any  `json:"args"`
+	}
+)
 
-// Keys form
-type KeyForm = struct {
-	Keys core.List `json:"keys"`
-}
+// Function names
+const (
+	FnIndex          = "index"
+	FnIndexPrefixed  = "index_prefixed"
+	FnInsert         = "insert"
+	FnInsertSelected = "insert_selected"
+	FnCopy           = "copy"
+	FnMove           = "move"
+	FnDelete         = "delete"
+	FnDeleteSelected = "delete_selected"
+	FnDeletePrefixed = "delete_prefixed"
+	FnQuery          = "query"
+	FnQuerySelected  = "query_selected"
+	FnQueryPrefixed  = "query_prefixed"
+)
 
 // Ping signature
-const Signature = "quicktable:pong"
+const Signature = "quicktable:healthy"
 
 // API routes
 const (
-	RoutePing    = "/ping"
-	RouteMetrics = "/metrics"
+	RouteHealth = "/api/health"
+	RouteQuery  = "/api/query"
+	RouteHash   = "/api/hash"
+)
 
-	RouteIndex        = "/api/index"
-	RouteIndexRanged  = "/api/index/ranged"
-	RouteInsert       = "/api/insert"
-	RouteInsertRanged = "/api/insert/ranged"
-	RouteAppend       = "/api/append"
-	RouteCopy         = "/api/copy"
-	RouteMove         = "/api/move"
-	RouteDelete       = "/api/delete"
-	RouteDeleteRanged = "/api/delete/ranged"
-	RouteQuery        = "/api/query"
-	RouteQueryRanged  = "/api/query/ranged"
-	RouteGenerateId   = "/api/generate/id"
-	RouteGenerateHash = "/api/generate/hash"
-	RouteGenerateKey  = "/api/generate/key"
-	RouteGenerateList = "/api/generate/list"
+// Status codes
+const (
+	StatusEngineError = -2
+	StatusApiError    = -1
+	StatusOk          = 0
+)
+
+// Error messages
+var (
+	ErrInvalidArgs = errors.New("invalid arguments specified")
+	ErrInvalidCast = errors.New("could not cast argument into desired type")
+	ErrInvalidFn   = errors.New("invalid function specified")
 )
