@@ -6,6 +6,6 @@ RUN rm -rf /home /media /opt /mnt /srv
 VOLUME [ "/data" ]
 WORKDIR /data
 CMD [ "/go/bin/cmd" ]
-ENV QTAB_PATH="/data/" QTAB_ADDR=":8080"
+ENV QT_PATH="/data/" QT_ADDR=":8080"
 LABEL org.opencontainers.image.source=https://github.com/TheDevtop/quicktable
 LABEL org.opencontainers.image.licenses=Apache-2.0

@@ -5,6 +5,3 @@ build:
 
 clean:
 	@rm quicktable
-
-docker:
-	@docker build -t ghcr.io/thedevtop/quicktable .

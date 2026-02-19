@@ -15,6 +15,22 @@ type (
 	}
 )
 
+// Function names
+const (
+	FnIndex          = "index"
+	FnIndexPrefixed  = "index_prefixed"
+	FnInsert         = "insert"
+	FnInsertSelected = "insert_selected"
+	FnCopy           = "copy"
+	FnMove           = "move"
+	FnDelete         = "delete"
+	FnDeleteSelected = "delete_selected"
+	FnDeletePrefixed = "delete_prefixed"
+	FnQuery          = "query"
+	FnQuerySelected  = "query_selected"
+	FnQueryPrefixed  = "query_prefixed"
+)
+
 // Ping signature
 const Signature = "quicktable:healthy"
 
@@ -35,5 +51,6 @@ const (
 // Error messages
 var (
 	ErrInvalidArgs = errors.New("invalid arguments specified")
+	ErrInvalidCast = errors.New("could not cast argument into desired type")
 	ErrInvalidFn   = errors.New("invalid function specified")
 )
