@@ -50,7 +50,9 @@ const (
 
 // Error messages
 var (
-	ErrInvalidArgs = errors.New("invalid arguments specified")
-	ErrInvalidCast = errors.New("could not cast argument into desired type")
-	ErrInvalidFn   = errors.New("invalid function specified")
+	ErrInvalidArgs  = errors.New("Invalid arguments specified")
+	ErrInvalidCast  = errors.New("Could not cast argument to desired type")
+	ErrInvalidFn    = errors.New("Invalid function specified")
+	ErrNoQuicktable = errors.New("Could not connect to Quicktable")
+	ErrFormNotOk    = errors.New("Form did not return OK")
 )

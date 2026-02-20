@@ -2,7 +2,6 @@ package client
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"net/http"
 
@@ -10,10 +9,6 @@ import (
 )
 
 const mimeJson = "application/json"
-
-func formatPath(base string, route string) string {
-	return base + route
-}
 
 func toBody(object any) (io.Reader, error) {
 	var (
@@ -26,6 +21,10 @@ func toBody(object any) (io.Reader, error) {
 	return body, nil
 }
 
+func (c *Conn) postQuery(body io.Reader) (*http.Response, error) {
+	return http.Post(c.baseAddr+shared.RouteQuery, mimeJson, body)
+}
+
 func Open(addr string) (*Conn, error) {
 	var (
 		resp *http.Response
@@ -33,14 +32,14 @@ func Open(addr string) (*Conn, error) {
 		buf  []byte
 		dbc  = new(Conn)
 	)
-	if resp, err = http.Get(formatPath(addr, shared.RoutePing)); err != nil {
+	if resp, err = http.Get(addr + shared.RouteHealth); err != nil {
 		return nil, err
 	}
 	if buf, err = io.ReadAll(resp.Body); err != nil {
 		return nil, err
 	}
 	if string(buf) != shared.Signature {
-		return nil, errors.New("Could not connect to Quicktable")
+		return nil, shared.ErrNoQuicktable
 	}
 	dbc.baseAddr = addr
 	return dbc, nil

@@ -4,8 +4,8 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/TheDevtop/quicktable/pkg/dkey"
 	"github.com/TheDevtop/quicktable/pkg/shared"
-	"github.com/TheDevtop/quicktable/pkg/shared/core"
 )
 
 type Conn struct {
@@ -13,256 +13,438 @@ type Conn struct {
 }
 
 func (c *Conn) List(str string) []string {
-	return core.Expand(str)
+	return dkey.Expand(str)
 }
 
 func (c *Conn) Key(list ...string) string {
-	return core.Merge(list...)
+	return dkey.Merge(list...)
 }
 
-func (c *Conn) Index(keys []string) (string, error) {
+func (c *Conn) Index(key string) (string, error) {
 	var (
 		err    error
 		resp   *http.Response
 		body   io.Reader
-		report shared.Report[core.Key]
+		report shared.FormResult[string]
 	)
-	if body, err = toBody(keys); err != nil {
+
+	// Construct a body
+	if body, err = toBody(shared.FormQuery{
+		Fn:   shared.FnIndex,
+		Args: []any{key},
+	}); err != nil {
 		return "", err
 	}
-	if resp, err = http.Post(formatPath(c.baseAddr, shared.RouteIndex), mimeJson, body); err != nil {
+
+	// Post the query
+	if resp, err = c.postQuery(body); err != nil {
 		return "", err
 	}
-	if report, err = shared.DecodeStream[shared.Report[core.Key]](resp.Body); err != nil {
+
+	// Decode the response
+	if report, err = shared.DecodeStream[shared.FormResult[string]](resp.Body); err != nil {
 		return "", err
+	}
+
+	// Check status
+	if report.Status != shared.StatusOk {
+		return "", shared.ErrFormNotOk
 	}
 	return report.Data, nil
 }
 
-func (c *Conn) IndexRanged(keys []string) ([]string, error) {
+func (c *Conn) IndexPrefixed(key string) ([]string, error) {
 	var (
 		err    error
 		resp   *http.Response
 		body   io.Reader
-		report shared.Report[core.List]
+		report shared.FormResult[[]string]
 	)
-	if body, err = toBody(keys); err != nil {
+
+	// Construct a body
+	if body, err = toBody(shared.FormQuery{
+		Fn:   shared.FnIndexPrefixed,
+		Args: []any{key},
+	}); err != nil {
 		return nil, err
 	}
-	if resp, err = http.Post(formatPath(c.baseAddr, shared.RouteIndexRanged), mimeJson, body); err != nil {
+
+	// Post the query
+	if resp, err = c.postQuery(body); err != nil {
 		return nil, err
 	}
-	if report, err = shared.DecodeStream[shared.Report[core.List]](resp.Body); err != nil {
+
+	// Decode the response
+	if report, err = shared.DecodeStream[shared.FormResult[[]string]](resp.Body); err != nil {
 		return nil, err
+	}
+
+	// Check status
+	if report.Status != shared.StatusOk {
+		return nil, shared.ErrFormNotOk
 	}
 	return report.Data, nil
 }
 
-func (c *Conn) Insert(keys []string, values []string) (string, error) {
+func (c *Conn) Insert(key, value string) (string, error) {
 	var (
 		err    error
 		resp   *http.Response
 		body   io.Reader
-		report shared.Report[core.Key]
+		report shared.FormResult[string]
 	)
-	if body, err = toBody(keys); err != nil {
+
+	// Construct a body
+	if body, err = toBody(shared.FormQuery{
+		Fn:   shared.FnInsert,
+		Args: []any{key, value},
+	}); err != nil {
 		return "", err
 	}
-	if resp, err = http.Post(formatPath(c.baseAddr, shared.RouteInsert), mimeJson, body); err != nil {
+
+	// Post the query
+	if resp, err = c.postQuery(body); err != nil {
 		return "", err
 	}
-	if report, err = shared.DecodeStream[shared.Report[core.Key]](resp.Body); err != nil {
+
+	// Decode the response
+	if report, err = shared.DecodeStream[shared.FormResult[string]](resp.Body); err != nil {
 		return "", err
+	}
+
+	// Check status
+	if report.Status != shared.StatusOk {
+		return "", shared.ErrFormNotOk
 	}
 	return report.Data, nil
 }
 
-func (c *Conn) InsertRanged(keys []string, values []string) ([]string, error) {
+func (c *Conn) InsertSelected(key string, pairs map[string]string) (string, error) {
 	var (
 		err    error
 		resp   *http.Response
 		body   io.Reader
-		report shared.Report[core.List]
+		report shared.FormResult[string]
 	)
-	if body, err = toBody(keys); err != nil {
-		return nil, err
+
+	// Construct a body
+	if body, err = toBody(shared.FormQuery{
+		Fn:   shared.FnInsertSelected,
+		Args: []any{key, pairs},
+	}); err != nil {
+		return "", err
 	}
-	if resp, err = http.Post(formatPath(c.baseAddr, shared.RouteInsertRanged), mimeJson, body); err != nil {
-		return nil, err
+
+	// Post the query
+	if resp, err = c.postQuery(body); err != nil {
+		return "", err
 	}
-	if report, err = shared.DecodeStream[shared.Report[core.List]](resp.Body); err != nil {
-		return nil, err
+
+	// Decode the response
+	if report, err = shared.DecodeStream[shared.FormResult[string]](resp.Body); err != nil {
+		return "", err
+	}
+
+	// Check status
+	if report.Status != shared.StatusOk {
+		return "", shared.ErrFormNotOk
 	}
 	return report.Data, nil
 }
 
-func (c *Conn) Append(keys []string, values []string) (string, error) {
+func (c *Conn) Copy(key, dest string) (string, error) {
 	var (
 		err    error
 		resp   *http.Response
 		body   io.Reader
-		report shared.Report[core.Key]
+		report shared.FormResult[string]
 	)
-	if body, err = toBody(keys); err != nil {
+
+	// Construct a body
+	if body, err = toBody(shared.FormQuery{
+		Fn:   shared.FnCopy,
+		Args: []any{key, dest},
+	}); err != nil {
 		return "", err
 	}
-	if resp, err = http.Post(formatPath(c.baseAddr, shared.RouteAppend), mimeJson, body); err != nil {
+
+	// Post the query
+	if resp, err = c.postQuery(body); err != nil {
 		return "", err
 	}
-	if report, err = shared.DecodeStream[shared.Report[core.Key]](resp.Body); err != nil {
+
+	// Decode the response
+	if report, err = shared.DecodeStream[shared.FormResult[string]](resp.Body); err != nil {
 		return "", err
+	}
+
+	// Check status
+	if report.Status != shared.StatusOk {
+		return "", shared.ErrFormNotOk
 	}
 	return report.Data, nil
 }
 
-func (c *Conn) Copy(keys []string, values []string) (string, error) {
+func (c *Conn) Move(key string, dest string) (string, error) {
 	var (
 		err    error
 		resp   *http.Response
 		body   io.Reader
-		report shared.Report[core.Key]
+		report shared.FormResult[string]
 	)
-	if body, err = toBody(keys); err != nil {
+
+	// Construct a body
+	if body, err = toBody(shared.FormQuery{
+		Fn:   shared.FnMove,
+		Args: []any{key, dest},
+	}); err != nil {
 		return "", err
 	}
-	if resp, err = http.Post(formatPath(c.baseAddr, shared.RouteCopy), mimeJson, body); err != nil {
+
+	// Post the query
+	if resp, err = c.postQuery(body); err != nil {
 		return "", err
 	}
-	if report, err = shared.DecodeStream[shared.Report[core.Key]](resp.Body); err != nil {
+
+	// Decode the response
+	if report, err = shared.DecodeStream[shared.FormResult[string]](resp.Body); err != nil {
 		return "", err
+	}
+
+	// Check status
+	if report.Status != shared.StatusOk {
+		return "", shared.ErrFormNotOk
 	}
 	return report.Data, nil
 }
 
-func (c *Conn) Move(keys []string, values []string) (string, error) {
+func (c *Conn) Delete(key string) (string, error) {
 	var (
 		err    error
 		resp   *http.Response
 		body   io.Reader
-		report shared.Report[core.Key]
+		report shared.FormResult[string]
 	)
-	if body, err = toBody(keys); err != nil {
+
+	// Construct a body
+	if body, err = toBody(shared.FormQuery{
+		Fn:   shared.FnDelete,
+		Args: []any{key},
+	}); err != nil {
 		return "", err
 	}
-	if resp, err = http.Post(formatPath(c.baseAddr, shared.RouteMove), mimeJson, body); err != nil {
+
+	// Post the query
+	if resp, err = c.postQuery(body); err != nil {
 		return "", err
 	}
-	if report, err = shared.DecodeStream[shared.Report[core.Key]](resp.Body); err != nil {
+
+	// Decode the response
+	if report, err = shared.DecodeStream[shared.FormResult[string]](resp.Body); err != nil {
 		return "", err
+	}
+
+	// Check status
+	if report.Status != shared.StatusOk {
+		return "", shared.ErrFormNotOk
 	}
 	return report.Data, nil
 }
 
-func (c *Conn) Delete(keys []string) (string, error) {
+func (c *Conn) DeleteSelected(key string, keys []string) error {
 	var (
 		err    error
 		resp   *http.Response
 		body   io.Reader
-		report shared.Report[core.Key]
+		report shared.FormResult[string]
 	)
-	if body, err = toBody(keys); err != nil {
+
+	// Construct a body
+	if body, err = toBody(shared.FormQuery{
+		Fn:   shared.FnDeleteSelected,
+		Args: []any{key, keys},
+	}); err != nil {
+		return err
+	}
+
+	// Post the query
+	if resp, err = c.postQuery(body); err != nil {
+		return err
+	}
+
+	// Decode the response
+	if report, err = shared.DecodeStream[shared.FormResult[string]](resp.Body); err != nil {
+		return err
+	}
+
+	// Check status
+	if report.Status != shared.StatusOk {
+		return shared.ErrFormNotOk
+	}
+	return nil
+}
+
+func (c *Conn) DeletePrefixed(key string) error {
+	var (
+		err    error
+		resp   *http.Response
+		body   io.Reader
+		report shared.FormResult[string]
+	)
+
+	// Construct a body
+	if body, err = toBody(shared.FormQuery{
+		Fn:   shared.FnDeletePrefixed,
+		Args: []any{key},
+	}); err != nil {
+		return err
+	}
+
+	// Post the query
+	if resp, err = c.postQuery(body); err != nil {
+		return err
+	}
+
+	// Decode the response
+	if report, err = shared.DecodeStream[shared.FormResult[string]](resp.Body); err != nil {
+		return err
+	}
+
+	// Check status
+	if report.Status != shared.StatusOk {
+		return shared.ErrFormNotOk
+	}
+	return nil
+}
+
+func (c *Conn) Query(key string) (string, error) {
+	var (
+		err    error
+		resp   *http.Response
+		body   io.Reader
+		report shared.FormResult[string]
+	)
+
+	// Construct a body
+	if body, err = toBody(shared.FormQuery{
+		Fn:   shared.FnQuery,
+		Args: []any{key},
+	}); err != nil {
 		return "", err
 	}
-	if resp, err = http.Post(formatPath(c.baseAddr, shared.RouteDelete), mimeJson, body); err != nil {
+
+	// Post the query
+	if resp, err = c.postQuery(body); err != nil {
 		return "", err
 	}
-	if report, err = shared.DecodeStream[shared.Report[core.Key]](resp.Body); err != nil {
+
+	// Decode the response
+	if report, err = shared.DecodeStream[shared.FormResult[string]](resp.Body); err != nil {
 		return "", err
+	}
+
+	// Check status
+	if report.Status != shared.StatusOk {
+		return "", shared.ErrFormNotOk
 	}
 	return report.Data, nil
 }
 
-func (c *Conn) DeleteRanged(keys []string) ([]string, error) {
+func (c *Conn) QuerySelected(key string, keys []string) (map[string]string, error) {
 	var (
 		err    error
 		resp   *http.Response
 		body   io.Reader
-		report shared.Report[core.List]
+		report shared.FormResult[map[string]string]
 	)
-	if body, err = toBody(keys); err != nil {
+
+	// Construct a body
+	if body, err = toBody(shared.FormQuery{
+		Fn:   shared.FnQuerySelected,
+		Args: []any{key, keys},
+	}); err != nil {
 		return nil, err
 	}
-	if resp, err = http.Post(formatPath(c.baseAddr, shared.RouteDeleteRanged), mimeJson, body); err != nil {
+
+	// Post the query
+	if resp, err = c.postQuery(body); err != nil {
 		return nil, err
 	}
-	if report, err = shared.DecodeStream[shared.Report[core.List]](resp.Body); err != nil {
+
+	// Decode the response
+	if report, err = shared.DecodeStream[shared.FormResult[map[string]string]](resp.Body); err != nil {
 		return nil, err
+	}
+
+	// Check status
+	if report.Status != shared.StatusOk {
+		return nil, shared.ErrFormNotOk
 	}
 	return report.Data, nil
 }
 
-func (c *Conn) Query(keys []string) ([]string, error) {
+func (c *Conn) QueryPrefixed(key string) (map[string]string, error) {
 	var (
 		err    error
 		resp   *http.Response
 		body   io.Reader
-		report shared.Report[core.List]
+		report shared.FormResult[map[string]string]
 	)
-	if body, err = toBody(keys); err != nil {
+
+	// Construct a body
+	if body, err = toBody(shared.FormQuery{
+		Fn:   shared.FnQueryPrefixed,
+		Args: []any{key},
+	}); err != nil {
 		return nil, err
 	}
-	if resp, err = http.Post(formatPath(c.baseAddr, shared.RouteQuery), mimeJson, body); err != nil {
+
+	// Post the query
+	if resp, err = c.postQuery(body); err != nil {
 		return nil, err
 	}
-	if report, err = shared.DecodeStream[shared.Report[core.List]](resp.Body); err != nil {
+
+	// Decode the response
+	if report, err = shared.DecodeStream[shared.FormResult[map[string]string]](resp.Body); err != nil {
 		return nil, err
+	}
+
+	// Check status
+	if report.Status != shared.StatusOk {
+		return nil, shared.ErrFormNotOk
 	}
 	return report.Data, nil
 }
 
-func (c *Conn) QueryRanged(keys []string) (map[string][]string, error) {
+func (c *Conn) Hash(key string) (string, error) {
 	var (
 		err    error
 		resp   *http.Response
 		body   io.Reader
-		report shared.Report[core.Pair]
+		report shared.FormResult[string]
 	)
-	if body, err = toBody(keys); err != nil {
-		return nil, err
-	}
-	if resp, err = http.Post(formatPath(c.baseAddr, shared.RouteQueryRanged), mimeJson, body); err != nil {
-		return nil, err
-	}
-	if report, err = shared.DecodeStream[shared.Report[core.Pair]](resp.Body); err != nil {
-		return nil, err
-	}
-	return report.Data, nil
-}
 
-func (c *Conn) NewId(keys []string) (string, error) {
-	var (
-		err    error
-		resp   *http.Response
-		body   io.Reader
-		report shared.Report[core.Key]
-	)
-	if body, err = toBody(keys); err != nil {
+	// Construct a body
+	if body, err = toBody(shared.FormQuery{
+		Fn:   "",
+		Args: []any{key},
+	}); err != nil {
 		return "", err
 	}
-	if resp, err = http.Post(formatPath(c.baseAddr, shared.RouteGenerateId), mimeJson, body); err != nil {
-		return "", err
-	}
-	if report, err = shared.DecodeStream[shared.Report[core.Key]](resp.Body); err != nil {
-		return "", err
-	}
-	return report.Data, nil
-}
 
-func (c *Conn) NewHash(keys []string) (string, error) {
-	var (
-		err    error
-		resp   *http.Response
-		body   io.Reader
-		report shared.Report[core.Key]
-	)
-	if body, err = toBody(keys); err != nil {
+	// Post the query
+	if resp, err = http.Post(c.baseAddr+shared.RouteHash, mimeJson, body); err != nil {
 		return "", err
 	}
-	if resp, err = http.Post(formatPath(c.baseAddr, shared.RouteGenerateHash), mimeJson, body); err != nil {
+
+	// Decode the response
+	if report, err = shared.DecodeStream[shared.FormResult[string]](resp.Body); err != nil {
 		return "", err
 	}
-	if report, err = shared.DecodeStream[shared.Report[core.Key]](resp.Body); err != nil {
-		return "", err
+
+	// Check status
+	if report.Status != shared.StatusOk {
+		return "", shared.ErrFormNotOk
 	}
 	return report.Data, nil
 }
