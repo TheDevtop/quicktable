@@ -5,7 +5,16 @@ on:
     branches:
       - 'main'
     tags:
-      - 'v*' # Triggers on tags starting with 'v', e.g., v1.0.1
+      - 'v*'
+
+# Required for GITHUB_TOKEN to have permission to push to GHCR
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push:
@@ -17,20 +26,23 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to DockerHub
+      # Logs in using the automatic GITHUB_TOKEN
+      - name: Log in to GitHub registry
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      # This step handles the logic for your tags automatically
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/your-repo-name
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
+            # Tags as 'latest' ONLY when pushing to main
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            # Tags with the git tag (e.g. v1.0.1) when a tag is pushed
             type=ref,event=tag
           
       - name: Build and push
