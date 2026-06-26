@@ -1,5 +1,10 @@
 package api
 
+/*
+	Quicktable
+	Shared API objects
+*/
+
 // Forms
 type (
 	FormExact struct {
@@ -18,7 +23,7 @@ type (
 	}
 )
 
-// Ping signature
+// Health signature
 const Signature = "quicktable:healthy"
 
 // API routes

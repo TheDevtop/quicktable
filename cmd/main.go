@@ -12,9 +12,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/TheDevtop/quicktable/internal/engine"
 	"github.com/TheDevtop/quicktable/pkg/api"
 	"github.com/TheDevtop/quicktable/pkg/logwrap"
-	badger "github.com/dgraph-io/badger/v4"
 )
 
 // Environment variables
@@ -24,33 +24,9 @@ const (
 )
 
 var (
-	dbPtr  *badger.DB
 	logPtr *logwrap.Logger
 	srvPtr net.Listener
 )
-
-// Starts and configures database
-func startDatabase() {
-	var (
-		path = os.Getenv(envPath)
-		opts badger.Options
-		err  error
-	)
-
-	if path == "" {
-		opts = badger.DefaultOptions("").WithInMemory(true)
-		logPtr.Warnf("%s not specified, running in memory\n", envPath)
-	} else {
-		opts = badger.DefaultOptions(path)
-		logPtr.Infof("Running at %s\n", path)
-	}
-
-	opts = opts.WithLogger(logPtr)
-
-	if dbPtr, err = badger.Open(opts); err != nil {
-		logPtr.Fatalf("Fatal error (%s)\n", err)
-	}
-}
 
 // Starts and configures HTTP server
 func startServer() {
@@ -91,7 +67,7 @@ func sigHandler() {
 	if err = srvPtr.Close(); err != nil {
 		logPtr.Errorf("Error (%s)\n", err)
 	}
-	if err = dbPtr.Close(); err != nil {
+	if err = engine.Stop(); err != nil {
 		logPtr.Fatalf("Fatal error (%s)\n", err)
 	}
 	logPtr.Infof("Stopped Quicktable\n")
@@ -103,7 +79,11 @@ func main() {
 	logPtr = logwrap.NewLogger()
 	logPtr.Print("Quicktable")
 
-	startDatabase()
+	// Start the database engine
+	if err := engine.Start(os.Getenv(envPath), logPtr); err != nil {
+		logPtr.Fatal("Could not start engine", "err", err)
+	}
+
 	startServer()
 	go func() {
 		if err := http.Serve(srvPtr, nil); err != nil {

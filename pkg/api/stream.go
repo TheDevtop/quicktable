@@ -1,5 +1,10 @@
 package api
 
+/*
+	Quicktable
+	JSON stream functions
+*/
+
 import (
 	"encoding/json"
 	"io"
