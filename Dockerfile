@@ -3,7 +3,7 @@ COPY . /go/src/
 WORKDIR /go/src
 RUN go install ./cmd
 RUN rm -rf /home /media /opt /mnt /srv
-VOLUME [ "/data" ]
+RUN mkdir /data
 WORKDIR /data
 CMD [ "/go/bin/cmd" ]
 ENV QT_PATH="/data/" QT_ADDR=":8080"
