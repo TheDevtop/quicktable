@@ -8,6 +8,7 @@ package main
 import (
 	"net/http"
 
+	"github.com/TheDevtop/quicktable/internal/engine"
 	"github.com/TheDevtop/quicktable/pkg/api"
 )
 
@@ -18,7 +19,36 @@ func apiHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func apiIndexExact(w http.ResponseWriter, r *http.Request) {
+	var (
+		err  error
+		form api.FormExact
+	)
 
+	if form, err = api.DecodeStream[api.FormExact](r.Body); err != nil {
+		logPtr.Error("apiIndexExact", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteIndexExact,
+			Status: api.StatusApiError,
+			Data:   err.Error(),
+		})
+		return
+	}
+
+	if _, err = engine.IndexExact(form.Key); err != nil {
+		logPtr.Error("apiIndexExact", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteIndexExact,
+			Status: api.StatusEngineError,
+			Data:   err.Error(),
+		})
+		return
+	}
+
+	api.EncodeStream(w, api.FormResponse[string]{
+		Route:  api.RouteIndexExact,
+		Status: api.StatusOk,
+		Data:   form.Key,
+	})
 }
 
 func apiIndexPrefix(w http.ResponseWriter, r *http.Request) {
