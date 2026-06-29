@@ -43,7 +43,7 @@ func Stop() error {
 	return enginePtr.Close()
 }
 
-// Lookup a specific key
+// Lookup a specific key, returns key
 func IndexExact(key string) (string, error) {
 	var err = enginePtr.View(func(txn *badger.Txn) error {
 		if item, err := txn.Get([]byte(key)); err != nil {
@@ -75,7 +75,7 @@ func IndexPrefix(prefix string) map[string]struct{} {
 	return keyMap
 }
 
-// Query an exact key
+// Query an exact key, returns value
 func QueryExact(key string) (string, error) {
 	var (
 		buf []byte
@@ -128,7 +128,7 @@ func QueryPrefix(prefix string) (map[string]string, error) {
 	return pairs, err
 }
 
-// Insert an exact key/value combination
+// Insert an exact key/value combination, returns key
 func InsertExact(key, value string) (string, error) {
 	var err error
 	err = enginePtr.Update(func(txn *badger.Txn) error {
@@ -152,7 +152,7 @@ func InsertPrefix(prefix string, pairs map[string]string) error {
 	return err
 }
 
-// Delete an exact key
+// Delete an exact key, returns key
 func DeleteExact(key string) (string, error) {
 	var err = enginePtr.Update(func(txn *badger.Txn) error {
 		return txn.Delete([]byte(key))

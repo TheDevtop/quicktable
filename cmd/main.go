@@ -63,7 +63,7 @@ func sigHandler() {
 	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
 	<-ch
 
-	logPtr.Infof("Caught signal, halting system")
+	logPtr.Infof("Caught signal, stopping Quicktable")
 	if err = srvPtr.Close(); err != nil {
 		logPtr.Errorf("Error (%s)\n", err)
 	}
