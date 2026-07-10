@@ -1,7 +1,6 @@
 build:
-	@go fmt ./cmd ./pkg/client
+	@go fmt ./cmd
 	@go build -o quicktable ./cmd
-	@go install ./pkg/client
 
 clean:
 	@rm quicktable

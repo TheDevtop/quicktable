@@ -2,7 +2,7 @@ package logwrap
 
 /*
 	Quicktable
-	Wrapper for logging
+	Wrapper for Charm.sh logger
 */
 
 import (

@@ -2,96 +2,274 @@ package main
 
 /*
 	Quicktable
-	API endpoints
+	API endpoint functions
 */
 
 import (
 	"net/http"
 
-	"github.com/TheDevtop/quicktable/pkg/engine"
-	"github.com/TheDevtop/quicktable/pkg/shared"
+	"github.com/TheDevtop/quicktable/internal/engine"
+	"github.com/TheDevtop/quicktable/pkg/api"
 )
 
 func apiHealth(w http.ResponseWriter, r *http.Request) {
-	shared.EncodeStream(w, shared.FormResult[string]{
-		Status: shared.StatusOk,
-		Data:   shared.Signature,
+	if err := api.EncodeStream(w, api.Signature); err != nil {
+		logPtr.Error("apiHealth()", "err", err)
+	}
+}
+
+func apiIndexExact(w http.ResponseWriter, r *http.Request) {
+	var (
+		err  error
+		form api.FormExact
+	)
+
+	if form, err = api.DecodeStream[api.FormExact](r.Body); err != nil {
+		logPtr.Error("apiIndexExact", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteIndexExact,
+			Status: api.StatusApiError,
+			Data:   err.Error(),
+		})
+		return
+	}
+
+	if _, err = engine.IndexExact(form.Key); err != nil {
+		logPtr.Error("apiIndexExact", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteIndexExact,
+			Status: api.StatusEngineError,
+			Data:   err.Error(),
+		})
+		return
+	}
+
+	api.EncodeStream(w, api.FormResponse[string]{
+		Route:  api.RouteIndexExact,
+		Status: api.StatusOk,
+		Data:   form.Key,
 	})
 }
 
-func apiQuery(w http.ResponseWriter, r *http.Request) {
+func apiIndexPrefix(w http.ResponseWriter, r *http.Request) {
 	var (
-		form   shared.FormQuery
-		result any
 		err    error
+		form   api.FormPrefix
+		keyMap map[string]struct{}
 	)
 
-	if form, err = shared.DecodeStream[shared.FormQuery](r.Body); err != nil {
-		logPtr.Error(err, "route", shared.RouteQuery)
-		shared.EncodeStream(w, shared.FormResult[string]{
-			Status: shared.StatusApiError,
+	if form, err = api.DecodeStream[api.FormPrefix](r.Body); err != nil {
+		logPtr.Error("apiIndexPrefix", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteIndexPrefix,
+			Status: api.StatusApiError,
 			Data:   err.Error(),
 		})
 		return
 	}
 
-	if result, err = dispatch(form.Fn, form.Args); err != nil {
-		logPtr.Error(err, "route", shared.RouteQuery, "fn", form.Fn)
-		shared.EncodeStream(w, shared.FormResult[string]{
-			Status: shared.StatusEngineError,
-			Data:   err.Error(),
-		})
-		return
-	}
-
-	if err = shared.EncodeStream(w, shared.FormResult[any]{
-		Status: shared.StatusOk,
-		Data:   result,
-	}); err != nil {
-		logPtr.Warn(err, "route", shared.RouteQuery)
-	}
+	keyMap = engine.IndexPrefix(form.Key)
+	api.EncodeStream(w, api.FormResponse[map[string]struct{}]{
+		Route:  api.RouteIndexPrefix,
+		Status: api.StatusOk,
+		Data:   keyMap,
+	})
 }
 
-func apiHash(w http.ResponseWriter, r *http.Request) {
-	form, err := shared.DecodeStream[shared.FormQuery](r.Body)
-	if err != nil {
-		logPtr.Error(err, "route", shared.RouteHash)
-		shared.EncodeStream(w, shared.FormResult[string]{
-			Status: shared.StatusApiError,
+func apiQueryExact(w http.ResponseWriter, r *http.Request) {
+	var (
+		err  error
+		form api.FormExact
+	)
+
+	if form, err = api.DecodeStream[api.FormExact](r.Body); err != nil {
+		logPtr.Error("apiQueryExact", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteQueryExact,
+			Status: api.StatusApiError,
 			Data:   err.Error(),
 		})
 		return
 	}
-	if len(form.Args) < 1 {
-		logPtr.Error(shared.ErrInvalidArgs, "route", shared.RouteHash)
-		shared.EncodeStream(w, shared.FormResult[string]{
-			Status: shared.StatusApiError,
-			Data:   shared.ErrInvalidArgs.Error(),
-		})
-		return
-	}
 
-	arg, ok := form.Args[0].(string)
-	if !ok {
-		logPtr.Error(shared.ErrInvalidArgs, "route", shared.RouteHash)
-		shared.EncodeStream(w, shared.FormResult[string]{
-			Status: shared.StatusApiError,
-			Data:   shared.ErrInvalidArgs.Error(),
-		})
-		return
-	}
-
-	if key, err := engine.GenerateHash(arg); err != nil {
-		logPtr.Error(err, "route", shared.RouteHash)
-		shared.EncodeStream(w, shared.FormResult[string]{
-			Status: shared.StatusEngineError,
+	if form.Value, err = engine.QueryExact(form.Key); err != nil {
+		logPtr.Error("apiQueryExact", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteQueryExact,
+			Status: api.StatusEngineError,
 			Data:   err.Error(),
 		})
 		return
-	} else {
-		shared.EncodeStream(w, shared.FormResult[string]{
-			Status: shared.StatusOk,
-			Data:   key,
-		})
 	}
+
+	api.EncodeStream(w, api.FormResponse[string]{
+		Route:  api.RouteQueryExact,
+		Status: api.StatusOk,
+		Data:   form.Value,
+	})
+}
+
+func apiQueryPrefix(w http.ResponseWriter, r *http.Request) {
+	var (
+		err  error
+		form api.FormPrefix
+	)
+
+	if form, err = api.DecodeStream[api.FormPrefix](r.Body); err != nil {
+		logPtr.Error("apiQueryPrefix", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteQueryPrefix,
+			Status: api.StatusApiError,
+			Data:   err.Error(),
+		})
+		return
+	}
+
+	if form.Value, err = engine.QueryPrefix(form.Key); err != nil {
+		logPtr.Error("apiQueryPrefix", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteQueryPrefix,
+			Status: api.StatusEngineError,
+			Data:   err.Error(),
+		})
+		return
+	}
+
+	api.EncodeStream(w, api.FormResponse[map[string]string]{
+		Route:  api.RouteQueryPrefix,
+		Status: api.StatusOk,
+		Data:   form.Value,
+	})
+}
+
+func apiInsertExact(w http.ResponseWriter, r *http.Request) {
+	var (
+		err  error
+		form api.FormExact
+	)
+
+	if form, err = api.DecodeStream[api.FormExact](r.Body); err != nil {
+		logPtr.Error("apiInsertExact", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteInsertExact,
+			Status: api.StatusApiError,
+			Data:   err.Error(),
+		})
+		return
+	}
+
+	if form.Key, err = engine.InsertExact(form.Key, form.Value); err != nil {
+		logPtr.Error("apiInsertExact", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteInsertExact,
+			Status: api.StatusEngineError,
+			Data:   err.Error(),
+		})
+		return
+	}
+
+	api.EncodeStream(w, api.FormResponse[string]{
+		Route:  api.RouteInsertExact,
+		Status: api.StatusOk,
+		Data:   form.Key,
+	})
+}
+
+func apiInsertPrefix(w http.ResponseWriter, r *http.Request) {
+	var (
+		err  error
+		form api.FormPrefix
+	)
+
+	if form, err = api.DecodeStream[api.FormPrefix](r.Body); err != nil {
+		logPtr.Error("apiInsertPrefix", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteInsertPrefix,
+			Status: api.StatusApiError,
+			Data:   err.Error(),
+		})
+		return
+	}
+
+	if err = engine.InsertPrefix(form.Key, form.Value); err != nil {
+		logPtr.Error("apiInsertPrefix", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteInsertPrefix,
+			Status: api.StatusEngineError,
+			Data:   err.Error(),
+		})
+		return
+	}
+
+	api.EncodeStream(w, api.FormResponse[string]{
+		Route:  api.RouteInsertPrefix,
+		Status: api.StatusOk,
+		Data:   form.Key,
+	})
+}
+
+func apiDeleteExact(w http.ResponseWriter, r *http.Request) {
+	var (
+		err  error
+		form api.FormExact
+	)
+
+	if form, err = api.DecodeStream[api.FormExact](r.Body); err != nil {
+		logPtr.Error("apiDeleteExact", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteDeleteExact,
+			Status: api.StatusApiError,
+			Data:   err.Error(),
+		})
+		return
+	}
+
+	if form.Key, err = engine.DeleteExact(form.Key); err != nil {
+		logPtr.Error("apiDeleteExact", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteDeleteExact,
+			Status: api.StatusEngineError,
+			Data:   err.Error(),
+		})
+		return
+	}
+
+	api.EncodeStream(w, api.FormResponse[string]{
+		Route:  api.RouteDeleteExact,
+		Status: api.StatusOk,
+		Data:   form.Key,
+	})
+}
+
+func apiDeletePrefix(w http.ResponseWriter, r *http.Request) {
+	var (
+		err  error
+		form api.FormPrefix
+	)
+
+	if form, err = api.DecodeStream[api.FormPrefix](r.Body); err != nil {
+		logPtr.Error("apiDeletePrefix", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteDeletePrefix,
+			Status: api.StatusApiError,
+			Data:   err.Error(),
+		})
+		return
+	}
+
+	if err = engine.DeletePrefix(form.Key); err != nil {
+		logPtr.Error("apiDeletePrefix", "err", err)
+		api.EncodeStream(w, api.FormResponse[string]{
+			Route:  api.RouteDeletePrefix,
+			Status: api.StatusEngineError,
+			Data:   err.Error(),
+		})
+		return
+	}
+
+	api.EncodeStream(w, api.FormResponse[string]{
+		Route:  api.RouteDeletePrefix,
+		Status: api.StatusOk,
+		Data:   form.Key,
+	})
 }
