@@ -36,8 +36,8 @@ spec:
         fsGroup: 10001
       containers:
         - name: quicktable
-          image: quicktable:latest
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/thedevtop/quicktable:latest
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 16000

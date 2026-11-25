@@ -1,6 +1,7 @@
 services:
   quicktable:
-    image: quicktable:latest
+    image: ghcr.io/thedevtop/quicktable:latest
+    pull_policy: always
     restart: unless-stopped
     ports:
       - "16000:16000"

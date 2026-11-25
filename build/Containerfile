@@ -32,3 +32,6 @@ EXPOSE 16000
 
 ENTRYPOINT ["quicktable"]
 CMD ["-addr", ":16000", "-dir", "/data"]
+
+LABEL org.opencontainers.image.source=https://github.com/TheDevtop/quicktable
+LABEL org.opencontainers.image.licenses=MIT
