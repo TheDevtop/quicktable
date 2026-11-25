@@ -1,0 +1,243 @@
+.TH QT 1
+.SH NAME
+qt \- Quicktable command-line client
+.SH SYNOPSIS
+.B qt
+[
+.B -addr
+.I url
+]
+.I command
+[
+.I arg ...
+]
+.SH DESCRIPTION
+.I Qt
+talks to a Quicktable server over its REST API.
+Each invocation runs one
+.I command
+against the server at
+.IR url ,
+by default
+.BR http://localhost:16000 .
+.PP
+Results are written to standard output:
+values, rows and query results as indented JSON;
+table names and row keys as plain lines of text.
+Commands that only modify state print nothing.
+Diagnostics go to standard error.
+.PP
+Arguments named
+.I json-*
+must be a single JSON document,
+so quote them for the shell.
+The
+.B -addr
+flag must precede the command.
+.SS Tables
+.TP
+.B list-tables
+Print the name of every table, one per line, sorted.
+.TP
+.BI drop-table " table"
+Delete
+.I table
+and all its rows.
+Dropping a table that does not exist is not an error.
+.SS Cells
+.TP
+.BI get-cell " table rowkey column"
+Print the value of one cell.
+.TP
+.BI set-cell " table rowkey column json-value"
+Set one cell to
+.IR json-value ,
+any JSON literal:
+.BR 42 ,
+.BR '"text"' ,
+.BR true ,
+.BR '[1,2]' .
+.TP
+.BI del-cell " table rowkey column"
+Remove one cell.
+.SS Rows
+.TP
+.BI list-rows " table"
+Print the key of every row in
+.IR table ,
+one per line, sorted.
+Listing a table that does not exist prints nothing.
+.TP
+.BI get-row " table rowkey"
+Print all columns of a row as a JSON object.
+.TP
+.BI set-row " table rowkey json-columns"
+Merge the columns of the JSON object
+.I json-columns
+into the row.
+Columns not named are left alone.
+.TP
+.BI insert-row " table \fR[\fPjson-columns\fR]"
+Create a row with a server-generated key and print the key.
+Without
+.I json-columns
+the row is created empty.
+.TP
+.BI del-row " table rowkey"
+Remove a row.
+.SS Queries
+.TP
+.BI query " table \fR[\fPjson-query\fR]"
+Scan
+.I table
+and print a JSON object with fields
+.BR table ,
+.B rows
+(each with
+.B rowKey
+and
+.BR columns )
+and
+.BR count .
+Without
+.I json-query
+all rows are returned.
+.I Json-query
+is an object with any of the fields:
+.RS
+.TP
+.B prefix
+string; only keys with this prefix.
+.TP
+.B startKey
+string; first key of the range.
+.TP
+.B endKey
+string; end of the range.
+.TP
+.B select
+array of column names to return.
+.TP
+.B orderDesc
+boolean; scan in descending key order.
+.TP
+.B offset
+number of matching rows to skip.
+.TP
+.B limit
+maximum number of rows to return.
+.TP
+.B where
+array of predicates
+.BR "{\(dqcolumn\(dq: \fIname\fP, \(dqop\(dq: \fIop\fP, \(dqvalue\(dq: \fIv\fP}" .
+.TP
+.B countOnly
+boolean; return only
+.BR count .
+.RE
+.SS Batches
+.TP
+.BI batch-get " table key \fR...\fP"
+Print a JSON object mapping each key to its row.
+.TP
+.BI batch-delete " table key \fR...\fP"
+Delete every named row.
+.SS Atomic operations
+.TP
+.BI incr " table rowkey column delta"
+Add the JSON number
+.I delta
+to a numeric cell and print the new value.
+.TP
+.BI append " table rowkey column value"
+Append
+.I value
+to a string or byte cell and print the new value.
+.I Value
+is taken literally, not as JSON.
+.TP
+.BI prepend " table rowkey column value"
+As
+.BR append ,
+but at the front.
+.TP
+.BI cas " table rowkey json-body"
+Check and set.
+.I Json-body
+is
+.BR "{\(dqcondition\(dq: \fIcond\fP, \(dqsetCols\(dq: \fIcolumns\fP}" ,
+where
+.I cond
+is
+.BR "{\(dqColumn\(dq: \fIname\fP, \(dqOp\(dq: \fIop\fP, \(dqValue\(dq: \fIv\fP}" .
+If the condition holds, the columns in
+.I columns
+are written to the row atomically.
+Without a condition the write is unconditional.
+The keys
+.B Condition
+and
+.B SetCols
+are accepted as well.
+.SH ENVIRONMENT
+.TP
+.B QUICKTABLE_ADDR
+Default server address;
+.B -addr
+overrides it.
+.SH EXAMPLES
+Store and read back a counter:
+.IP
+.EX
+qt set-cell stats home hits 0
+qt incr stats home hits 1
+qt get-cell stats home hits
+.EE
+.PP
+Insert a user and list the first ten whose key starts with
+.BR u :
+.IP
+.EX
+qt insert-row users '{"name": "ann", "age": 31}'
+qt query users '{"prefix": "u", "limit": 10, "select": ["name"]}'
+.EE
+.PP
+Rename only if the name is unchanged:
+.IP
+.EX
+qt cas users u1 '{"condition": {"Column": "name", "Op": "=",
+	"Value": "ann"}, "setCols": {"name": "anna"}}'
+.EE
+.PP
+Talk to another server:
+.IP
+.EX
+QUICKTABLE_ADDR=http://db:16000 qt list-tables
+.EE
+.SH SOURCE
+.B cmd/client
+.br
+.B pkg/client
+.SH SEE ALSO
+.I docs/rest.md
+for the REST API and the operators accepted in
+.B where
+and
+.B cas
+conditions.
+.SH DIAGNOSTICS
+Exit status is 0 on success,
+1 if the request failed or the server returned an error,
+reported as
+.B "error: quicktable: \fIstatus message\fP" ,
+and 2 on a usage error.
+.SH BUGS
+Table names, row keys and columns are put into the URL path without escaping,
+so names containing
+.B /
+or
+.B ?
+misbehave.
+.PP
+.I Cas
+silently treats a body that fails to decode as unconditional.

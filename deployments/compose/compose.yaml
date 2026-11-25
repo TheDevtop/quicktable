@@ -1,0 +1,11 @@
+services:
+  quicktable:
+    image: quicktable:latest
+    restart: unless-stopped
+    ports:
+      - "16000:16000"
+    volumes:
+      - qt_data:/data
+
+volumes:
+  qt_data:
