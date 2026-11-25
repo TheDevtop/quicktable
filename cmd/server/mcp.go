@@ -336,21 +336,13 @@ func registerMCPTools(s *server.MCPServer, db *qte.DB) {
 			limit, _ := req.GetArguments()["limit"].(float64)
 			countOnly, _ := req.GetArguments()["countOnly"].(bool)
 
-			qb := db.Query(table)
-			if prefix != "" {
-				qb.WithPrefix(prefix)
-			}
-			if startKey != "" || endKey != "" {
-				qb.WithKeyRange(startKey, endKey)
-			}
+			qb := db.Query(table).
+				WithPrefix(prefix).
+				WithKeyRange(startKey, endKey).
+				Offset(int(offset)).
+				Limit(int(limit))
 			if orderDesc {
 				qb.OrderDesc()
-			}
-			if offset > 0 {
-				qb.Offset(int(offset))
-			}
-			if limit > 0 {
-				qb.Limit(int(limit))
 			}
 
 			if raw, ok := req.GetArguments()["select"]; ok {
@@ -407,7 +399,7 @@ func registerMCPTools(s *server.MCPServer, db *qte.DB) {
 	// 9. qte_incr_cell
 	s.AddTool(
 		mcp.NewTool("qte_incr_cell",
-			mcp.WithDescription("Atomically increment an integer or float cell value."),
+			mcp.WithDescription("Atomically increment a numeric cell value."),
 			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
 			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
 			mcp.WithString("column", mcp.Required(), mcp.Description("Column name")),

@@ -21,14 +21,14 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// mapQTEError converts engine errors to HTTP status codes and messages.
+// writeQTEError converts engine errors to HTTP status codes and messages.
 func writeQTEError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, qte.ErrRowNotFound), errors.Is(err, qte.ErrColumnNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, qte.ErrInvalidTable), errors.Is(err, qte.ErrInvalidRowKey),
 		errors.Is(err, qte.ErrInvalidColumn), errors.Is(err, qte.ErrUnsupportedVal),
-		errors.Is(err, qte.ErrNonNumericValue), errors.Is(err, qte.ErrNonBinaryValue),
+		errors.Is(err, qte.ErrNonNumericValue), errors.Is(err, qte.ErrNonStringValue),
 		errors.Is(err, qte.ErrInvalidOp):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, qte.ErrConditionFailed):
@@ -278,35 +278,17 @@ func (h *restHandler) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	qb := h.db.Query(table)
-	if req.Prefix != "" {
-		qb.WithPrefix(req.Prefix)
-	}
-	if req.StartKey != "" || req.EndKey != "" {
-		qb.WithKeyRange(req.StartKey, req.EndKey)
-	}
-	if len(req.SelectCols) > 0 {
-		qb.Select(req.SelectCols...)
-	}
+	qb := h.db.Query(table).
+		WithPrefix(req.Prefix).
+		WithKeyRange(req.StartKey, req.EndKey).
+		Select(req.SelectCols...).
+		Offset(req.Offset).
+		Limit(req.Limit)
 	if req.OrderDesc {
 		qb.OrderDesc()
 	}
-	if req.Offset > 0 {
-		qb.Offset(req.Offset)
-	}
-	if req.Limit > 0 {
-		qb.Limit(req.Limit)
-	}
-
 	for _, p := range req.Where {
-		switch p.Op {
-		case qte.OpExists:
-			qb.WhereHasColumn(p.Column)
-		case qte.OpMissing:
-			qb.WhereMissingColumn(p.Column)
-		default:
-			qb.Where(p.Column, p.Op, p.Value)
-		}
+		qb.Where(p.Column, p.Op, p.Value)
 	}
 
 	if req.CountOnly {
@@ -346,8 +328,11 @@ type BatchRequest struct {
 func (h *restHandler) handleBatch(w http.ResponseWriter, r *http.Request) {
 	table := r.PathValue("table")
 
+	// Unknown fields are rejected: a misspelled "setCols" must not be silently dropped.
 	var req BatchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json batch body: "+err.Error())
 		return
 	}
@@ -383,7 +368,7 @@ func (h *restHandler) handleBatch(w http.ResponseWriter, r *http.Request) {
 // POST /api/tables/{table}/rows/{rowKey}/incr
 type incrReq struct {
 	Column string `json:"column"`
-	Delta  any    `json:"delta"` // int, int64 or float64
+	Delta  any    `json:"delta"`
 }
 
 func (h *restHandler) handleIncr(w http.ResponseWriter, r *http.Request) {
@@ -413,7 +398,7 @@ func (h *restHandler) handleIncr(w http.ResponseWriter, r *http.Request) {
 // POST /api/tables/{table}/rows/{rowKey}/append
 type stringModReq struct {
 	Column string `json:"column"`
-	Value  any    `json:"value"` // string or []byte
+	Value  string `json:"value"`
 }
 
 func (h *restHandler) handleAppend(w http.ResponseWriter, r *http.Request) {

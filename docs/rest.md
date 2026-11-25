@@ -342,7 +342,7 @@ Each item in `rows` has the shape:
 POST /api/tables/{table}/batch
 ```
 
-Multi-row read, write, or delete in a single request.
+Multi-row read, write, or delete in a single request. Unknown fields in the body or in a mutation are rejected with **400**, so a misspelled `setCols` is not silently dropped.
 
 **Body**
 
@@ -451,7 +451,7 @@ All atomic operations return the new value after the operation.
 POST /api/tables/{table}/rows/{rowKey}/incr
 ```
 
-Atomically adds `delta` to a numeric cell. Float cells stay floats; integer cells stay integers unless `delta` has a fractional part. The cell is created at zero if it does not exist.
+Atomically adds `delta` to a numeric cell. The cell is created at zero if it does not exist.
 
 **Body**
 

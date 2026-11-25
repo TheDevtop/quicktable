@@ -23,7 +23,7 @@ var (
 	ErrInvalidTable   = errors.New("table name must be non-empty and contain no whitespace")
 	ErrInvalidRowKey  = errors.New("row key must be an 8-digit hexadecimal string")
 	ErrInvalidColumn  = errors.New("column name must be non-empty and contain no whitespace")
-	ErrUnsupportedVal = errors.New("value must be a scalar (int, int64, uint64, float64, bool, string, []byte)")
+	ErrUnsupportedVal = errors.New("value must be a scalar (float64, bool, string)")
 	ErrRowNotFound    = errors.New("row not found")
 	ErrColumnNotFound = errors.New("column not found")
 	ErrCorruptData    = errors.New("corrupted binary data encountered in storage")
@@ -179,102 +179,52 @@ func decodeKey(raw []byte) (string, string, string, error) {
 	return string(parts[0]), string(parts[1]), string(parts[2]), nil
 }
 
+// cellKey validates a cell address and returns its storage key.
+func cellKey(table, rowKey, column string) ([]byte, error) {
+	if err := ValidateTable(table); err != nil {
+		return nil, err
+	}
+	if err := ValidateRowKey(rowKey); err != nil {
+		return nil, err
+	}
+	if err := ValidateColumn(column); err != nil {
+		return nil, err
+	}
+	return encodeKey(table, strings.ToLower(rowKey), column), nil
+}
+
+// rowPrefix validates a row address and returns the prefix of its keys.
+func rowPrefix(table, rowKey string) ([]byte, error) {
+	if err := ValidateTable(table); err != nil {
+		return nil, err
+	}
+	if err := ValidateRowKey(rowKey); err != nil {
+		return nil, err
+	}
+	return encodeRowPrefix(table, strings.ToLower(rowKey)), nil
+}
+
 // ============================================================================
 // Scalar Value Serialization
 // ============================================================================
 
-// encodeValue serializes supported Go scalar types into a self-describing byte slice.
+// encodeValue serializes a scalar into a self-describing byte slice.
+// Only the scalar types JSON can carry are accepted.
 func encodeValue(val any) ([]byte, error) {
-	if val == nil {
-		return nil, fmt.Errorf("%w: nil is not allowed", ErrUnsupportedVal)
-	}
-
 	switch v := val.(type) {
-	case int:
-		buf := make([]byte, 9)
-		buf[0] = tagInt64
-		binary.BigEndian.PutUint64(buf[1:], uint64(v))
-		return buf, nil
-	case int8:
-		buf := make([]byte, 9)
-		buf[0] = tagInt64
-		binary.BigEndian.PutUint64(buf[1:], uint64(v))
-		return buf, nil
-	case int16:
-		buf := make([]byte, 9)
-		buf[0] = tagInt64
-		binary.BigEndian.PutUint64(buf[1:], uint64(v))
-		return buf, nil
-	case int32:
-		buf := make([]byte, 9)
-		buf[0] = tagInt64
-		binary.BigEndian.PutUint64(buf[1:], uint64(v))
-		return buf, nil
-	case int64:
-		buf := make([]byte, 9)
-		buf[0] = tagInt64
-		binary.BigEndian.PutUint64(buf[1:], uint64(v))
-		return buf, nil
-
-	case uint:
-		buf := make([]byte, 9)
-		buf[0] = tagUint64
-		binary.BigEndian.PutUint64(buf[1:], uint64(v))
-		return buf, nil
-	case uint8:
-		buf := make([]byte, 9)
-		buf[0] = tagUint64
-		binary.BigEndian.PutUint64(buf[1:], uint64(v))
-		return buf, nil
-	case uint16:
-		buf := make([]byte, 9)
-		buf[0] = tagUint64
-		binary.BigEndian.PutUint64(buf[1:], uint64(v))
-		return buf, nil
-	case uint32:
-		buf := make([]byte, 9)
-		buf[0] = tagUint64
-		binary.BigEndian.PutUint64(buf[1:], uint64(v))
-		return buf, nil
-	case uint64:
-		buf := make([]byte, 9)
-		buf[0] = tagUint64
-		binary.BigEndian.PutUint64(buf[1:], v)
-		return buf, nil
-
-	case float32:
-		buf := make([]byte, 9)
-		buf[0] = tagFloat64
-		binary.BigEndian.PutUint64(buf[1:], math.Float64bits(float64(v)))
-		return buf, nil
 	case float64:
 		buf := make([]byte, 9)
 		buf[0] = tagFloat64
 		binary.BigEndian.PutUint64(buf[1:], math.Float64bits(v))
 		return buf, nil
-
 	case bool:
-		buf := make([]byte, 2)
-		buf[0] = tagBool
+		buf := []byte{tagBool, 0}
 		if v {
 			buf[1] = 1
-		} else {
-			buf[1] = 0
 		}
 		return buf, nil
-
 	case string:
-		buf := make([]byte, 1+len(v))
-		buf[0] = tagString
-		copy(buf[1:], v)
-		return buf, nil
-
-	case []byte:
-		buf := make([]byte, 1+len(v))
-		buf[0] = tagBytes
-		copy(buf[1:], v)
-		return buf, nil
-
+		return append([]byte{tagString}, v...), nil
 	default:
 		return nil, fmt.Errorf("%w: got %T", ErrUnsupportedVal, val)
 	}
@@ -290,23 +240,19 @@ func decodeValue(raw []byte) (any, error) {
 	payload := raw[1:]
 
 	switch tag {
-	case tagInt64:
+	// Integer tags are only read: older versions stored them, all numbers are now float64.
+	case tagInt64, tagUint64, tagFloat64:
 		if len(payload) != 8 {
-			return nil, fmt.Errorf("%w: invalid int64 length", ErrCorruptData)
+			return nil, fmt.Errorf("%w: invalid number length", ErrCorruptData)
 		}
-		return int64(binary.BigEndian.Uint64(payload)), nil
-
-	case tagUint64:
-		if len(payload) != 8 {
-			return nil, fmt.Errorf("%w: invalid uint64 length", ErrCorruptData)
+		n := binary.BigEndian.Uint64(payload)
+		switch tag {
+		case tagInt64:
+			return float64(int64(n)), nil
+		case tagUint64:
+			return float64(n), nil
 		}
-		return binary.BigEndian.Uint64(payload), nil
-
-	case tagFloat64:
-		if len(payload) != 8 {
-			return nil, fmt.Errorf("%w: invalid float64 length", ErrCorruptData)
-		}
-		return math.Float64frombits(binary.BigEndian.Uint64(payload)), nil
+		return math.Float64frombits(n), nil
 
 	case tagBool:
 		if len(payload) != 1 {
@@ -314,17 +260,72 @@ func decodeValue(raw []byte) (any, error) {
 		}
 		return payload[0] != 0, nil
 
-	case tagString:
+	// Byte cells are only read: older versions stored them, all text is now string.
+	case tagString, tagBytes:
 		return string(payload), nil
-
-	case tagBytes:
-		out := make([]byte, len(payload))
-		copy(out, payload)
-		return out, nil
 
 	default:
 		return nil, fmt.Errorf("%w: unknown type tag 0x%x", ErrCorruptData, tag)
 	}
+}
+
+// readValue decodes the value of a stored cell.
+func readValue(item *badger.Item) (any, error) {
+	var val any
+	err := item.Value(func(raw []byte) error {
+		var err error
+		val, err = decodeValue(raw)
+		return err
+	})
+	return val, err
+}
+
+// readRow decodes every column stored under prefix, returning nil if there are none.
+func readRow(txn *badger.Txn, prefix []byte) (Row, error) {
+	opts := badger.DefaultIteratorOptions
+	opts.Prefix = prefix
+	it := txn.NewIterator(opts)
+	defer it.Close()
+
+	var row Row
+	for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+		item := it.Item()
+		_, _, col, err := decodeKey(item.Key())
+		if err != nil {
+			return nil, err
+		}
+		val, err := readValue(item)
+		if err != nil {
+			return nil, err
+		}
+		if row == nil {
+			row = make(Row)
+		}
+		row[col] = val
+	}
+	return row, nil
+}
+
+// deleteRow deletes every column stored under prefix.
+func deleteRow(txn *badger.Txn, prefix []byte) error {
+	opts := badger.DefaultIteratorOptions
+	opts.PrefetchValues = false
+	opts.Prefix = prefix
+	it := txn.NewIterator(opts)
+
+	// Collect first: a read-write transaction allows no writes while its iterator is open.
+	var keys [][]byte
+	for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+		keys = append(keys, it.Item().KeyCopy(nil))
+	}
+	it.Close()
+
+	for _, k := range keys {
+		if err := txn.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ============================================================================
@@ -333,27 +334,16 @@ func decodeValue(raw []byte) (any, error) {
 
 // SetCell writes a single scalar value at (Table -> RowKey -> Column).
 func (db *DB) SetCell(table, rowKey, column string, value any) error {
-	if err := ValidateTable(table); err != nil {
-		return err
-	}
-	if err := ValidateRowKey(rowKey); err != nil {
-		return err
-	}
-	if err := ValidateColumn(column); err != nil {
-		return err
-	}
-
-	encodedVal, err := encodeValue(value)
+	key, err := cellKey(table, rowKey, column)
 	if err != nil {
 		return err
 	}
-
-	// Normalize RowKey to lowercase hex for consistent storage lookups
-	normalizedRowKey := strings.ToLower(rowKey)
-	key := encodeKey(table, normalizedRowKey, column)
-
+	enc, err := encodeValue(value)
+	if err != nil {
+		return err
+	}
 	return db.bdb.Update(func(txn *badger.Txn) error {
-		return txn.Set(key, encodedVal)
+		return txn.Set(key, enc)
 	})
 }
 
@@ -463,21 +453,13 @@ func writeEntries(txn *badger.Txn, entries []kvPair) error {
 
 // GetCell retrieves a single scalar value at (Table -> RowKey -> Column).
 func (db *DB) GetCell(table, rowKey, column string) (any, error) {
-	if err := ValidateTable(table); err != nil {
-		return nil, err
-	}
-	if err := ValidateRowKey(rowKey); err != nil {
-		return nil, err
-	}
-	if err := ValidateColumn(column); err != nil {
+	key, err := cellKey(table, rowKey, column)
+	if err != nil {
 		return nil, err
 	}
 
-	normalizedRowKey := strings.ToLower(rowKey)
-	key := encodeKey(table, normalizedRowKey, column)
-
-	var result any
-	err := db.bdb.View(func(txn *badger.Txn) error {
+	var val any
+	err = db.bdb.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(key)
 		if errors.Is(err, badger.ErrKeyNotFound) {
 			return ErrColumnNotFound
@@ -485,65 +467,29 @@ func (db *DB) GetCell(table, rowKey, column string) (any, error) {
 		if err != nil {
 			return err
 		}
-
-		return item.Value(func(val []byte) error {
-			decoded, err := decodeValue(val)
-			if err != nil {
-				return err
-			}
-			result = decoded
-			return nil
-		})
+		val, err = readValue(item)
+		return err
 	})
-
-	return result, err
+	return val, err
 }
 
 // GetRow retrieves all columns and their scalar values for a specific (Table -> RowKey).
 func (db *DB) GetRow(table, rowKey string) (Row, error) {
-	if err := ValidateTable(table); err != nil {
-		return nil, err
-	}
-	if err := ValidateRowKey(rowKey); err != nil {
-		return nil, err
-	}
-
-	normalizedRowKey := strings.ToLower(rowKey)
-	prefix := encodeRowPrefix(table, normalizedRowKey)
-	row := make(Row)
-
-	err := db.bdb.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = prefix
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			item := it.Item()
-			_, _, col, err := decodeKey(item.Key())
-			if err != nil {
-				return err
-			}
-
-			err = item.Value(func(val []byte) error {
-				decoded, err := decodeValue(val)
-				if err != nil {
-					return err
-				}
-				row[col] = decoded
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-
+	prefix, err := rowPrefix(table, rowKey)
 	if err != nil {
 		return nil, err
 	}
-	if len(row) == 0 {
+
+	var row Row
+	err = db.bdb.View(func(txn *badger.Txn) error {
+		var err error
+		row, err = readRow(txn, prefix)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
 		return nil, ErrRowNotFound
 	}
 	return row, nil
@@ -551,19 +497,10 @@ func (db *DB) GetRow(table, rowKey string) (Row, error) {
 
 // DeleteCell removes a single column from a row.
 func (db *DB) DeleteCell(table, rowKey, column string) error {
-	if err := ValidateTable(table); err != nil {
+	key, err := cellKey(table, rowKey, column)
+	if err != nil {
 		return err
 	}
-	if err := ValidateRowKey(rowKey); err != nil {
-		return err
-	}
-	if err := ValidateColumn(column); err != nil {
-		return err
-	}
-
-	normalizedRowKey := strings.ToLower(rowKey)
-	key := encodeKey(table, normalizedRowKey, column)
-
 	return db.bdb.Update(func(txn *badger.Txn) error {
 		return txn.Delete(key)
 	})
@@ -571,35 +508,7 @@ func (db *DB) DeleteCell(table, rowKey, column string) error {
 
 // DeleteRow atomically removes all columns associated with (Table -> RowKey).
 func (db *DB) DeleteRow(table, rowKey string) error {
-	if err := ValidateTable(table); err != nil {
-		return err
-	}
-	if err := ValidateRowKey(rowKey); err != nil {
-		return err
-	}
-
-	normalizedRowKey := strings.ToLower(rowKey)
-	prefix := encodeRowPrefix(table, normalizedRowKey)
-
-	return db.bdb.Update(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.PrefetchValues = false // Key-only iteration for fast deletes
-		opts.Prefix = prefix
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		var keysToDelete [][]byte
-		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			keysToDelete = append(keysToDelete, it.Item().KeyCopy(nil))
-		}
-
-		for _, k := range keysToDelete {
-			if err := txn.Delete(k); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	return db.BatchDeleteRows(table, []string{rowKey})
 }
 
 // ListTables returns the names of all tables in the database, in sorted order.
@@ -680,64 +589,4 @@ func (db *DB) DropTable(table string) error {
 		return err
 	}
 	return db.bdb.DropPrefix(encodeTablePrefix(table))
-}
-
-// ScanTable iterates through every row in a Table, invoking fn(rowKey, row).
-// Returning false from fn stops the scan early.
-func (db *DB) ScanTable(table string, fn func(rowKey string, row Row) bool) error {
-	if err := ValidateTable(table); err != nil {
-		return err
-	}
-
-	prefix := encodeTablePrefix(table)
-
-	return db.bdb.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = prefix
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		var currentRowKey string
-		var currentRow Row
-
-		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
-			item := it.Item()
-			_, rk, col, err := decodeKey(item.Key())
-			if err != nil {
-				return err
-			}
-
-			// When RowKey changes, emit the completed previous row
-			if currentRowKey != "" && rk != currentRowKey {
-				if !fn(currentRowKey, currentRow) {
-					return nil
-				}
-				currentRow = nil
-			}
-
-			if currentRow == nil {
-				currentRowKey = rk
-				currentRow = make(Row)
-			}
-
-			err = item.Value(func(val []byte) error {
-				decoded, err := decodeValue(val)
-				if err != nil {
-					return err
-				}
-				currentRow[col] = decoded
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-		}
-
-		// Emit final buffered row
-		if currentRow != nil {
-			fn(currentRowKey, currentRow)
-		}
-
-		return nil
-	})
 }

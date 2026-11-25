@@ -198,7 +198,7 @@ A predicate is `{"column": "age", "op": ">=", "value": 18}`. The operators are t
 
 ### `qte_incr_cell`
 
-Atomically increment an integer or float cell. The cell is initialised to zero if it does not exist. Float cells stay floats; integer cells stay integers unless `delta` has a fractional part.
+Atomically increment a numeric cell. The cell is initialised to zero if it does not exist.
 
 **Parameters** — `table`, `rowKey`, `column` (all required), `delta` (number, required)
 
@@ -421,7 +421,7 @@ Tool errors are returned as MCP tool results with `isError: true`. The text cont
 | `column name must be non-empty and contain no whitespace` | Bad column argument |
 | `value must be a scalar (...)` | Unsupported value type |
 | `cell value is not numeric` | Increment on a non-numeric cell |
-| `cell value is not a string or byte slice` | Append/prepend on wrong type |
+| `cell value is not a string` | Append/prepend on wrong type |
 | `unknown comparison operator: ...` | Bad `op` in a `where` predicate or `cas` condition |
 | `unknown argument ...`, `unknown condition key ...`, `mutation N: ...` | Misspelled or malformed `qte_cas` / `qte_batch_write` input |
 | `check and put condition failed` | CAS condition not satisfied |

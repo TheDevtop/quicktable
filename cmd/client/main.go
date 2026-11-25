@@ -277,9 +277,9 @@ func cmdBatchDelete(c *client.Client, args []string) error {
 
 func cmdIncr(c *client.Client, args []string) error {
 	needArgs(args, 4, "incr")
-	delta, err := parseJSONValue(args[3])
-	if err != nil {
-		return err
+	var delta float64
+	if err := json.Unmarshal([]byte(args[3]), &delta); err != nil {
+		return fmt.Errorf("invalid json number %q: %w", args[3], err)
 	}
 	val, err := c.Incr(args[0], args[1], args[2], delta)
 	if err != nil {
