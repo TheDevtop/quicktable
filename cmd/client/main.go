@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"git.hkr.lan/thijs/quicktable/pkg/client"
+	"github.com/TheDevtop/quicktable/pkg/client"
 )
 
 var addr = flag.String("addr", "http://localhost:16000", "Quicktable server address")
@@ -23,6 +23,8 @@ func main() {
 	var err error
 
 	switch args[0] {
+	case "health":
+		err = c.Health()
 	case "list-tables":
 		err = cmdListTables(c, args[1:])
 	case "drop-table":
@@ -47,6 +49,8 @@ func main() {
 		err = cmdQuery(c, args[1:])
 	case "batch-get":
 		err = cmdBatchGet(c, args[1:])
+	case "batch-write":
+		err = cmdBatchWrite(c, args[1:])
 	case "batch-delete":
 		err = cmdBatchDelete(c, args[1:])
 	case "incr":
@@ -72,6 +76,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `usage: qt [-addr url] <command> [args...]
 
 commands:
+  health
   list-tables
   drop-table  <table>
   get-cell   <table> <rowKey> <column>
@@ -84,6 +89,7 @@ commands:
   del-row     <table> <rowKey>
   query       <table> [json-query]
   batch-get   <table> <key> [key...]
+  batch-write <table> <json-mutations>
   batch-delete <table> <key> [key...]
   incr        <table> <rowKey> <column> <delta>
   append      <table> <rowKey> <column> <value>
@@ -234,6 +240,10 @@ func cmdQuery(c *client.Client, args []string) error {
 	if err != nil {
 		return err
 	}
+	if q != nil && q.CountOnly {
+		printJSON(map[string]int{"count": res.Count})
+		return nil
+	}
 	printJSON(res)
 	return nil
 }
@@ -246,6 +256,18 @@ func cmdBatchGet(c *client.Client, args []string) error {
 	}
 	printJSON(rows)
 	return nil
+}
+
+func cmdBatchWrite(c *client.Client, args []string) error {
+	needArgs(args, 2, "batch-write")
+	// Unknown keys are rejected so a misspelled setCols is not silently dropped.
+	var muts []client.Mutation
+	dec := json.NewDecoder(strings.NewReader(args[1]))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&muts); err != nil {
+		return fmt.Errorf("invalid json mutations: %w", err)
+	}
+	return c.BatchWrite(args[0], muts)
 }
 
 func cmdBatchDelete(c *client.Client, args []string) error {
@@ -296,23 +318,12 @@ func cmdCAS(c *client.Client, args []string) error {
 		Condition *client.CASCondition `json:"condition,omitempty"`
 		SetCols   client.Row           `json:"setCols"`
 	}
-	if err := json.Unmarshal([]byte(args[2]), &body); err != nil {
+	// Field names match case-insensitively; unknown ones are rejected so a
+	// misspelled "condition" cannot turn into an unconditional write.
+	dec := json.NewDecoder(strings.NewReader(args[2]))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
 		return fmt.Errorf("invalid json cas body: %w", err)
-	}
-
-	// CAS condition fields arrive camelCase; normalise to PascalCase for the wire.
-	// Accept both styles transparently via a raw re-parse.
-	if body.Condition == nil && body.SetCols == nil {
-		// Try alternate casing via raw map
-		var raw map[string]json.RawMessage
-		_ = json.Unmarshal([]byte(args[2]), &raw)
-		if v, ok := raw["Condition"]; ok {
-			body.Condition = &client.CASCondition{}
-			_ = json.Unmarshal(v, body.Condition)
-		}
-		if v, ok := raw["SetCols"]; ok {
-			_ = json.Unmarshal(v, &body.SetCols)
-		}
 	}
 
 	return c.CAS(table, rowKey, body.Condition, body.SetCols)
@@ -321,7 +332,6 @@ func cmdCAS(c *client.Client, args []string) error {
 func init() {
 	// Accept -addr from QUICKTABLE_ADDR env as a default.
 	if v := os.Getenv("QUICKTABLE_ADDR"); v != "" {
-		_ = strings.TrimSpace(v)
-		flag.Set("addr", v)
+		flag.Set("addr", strings.TrimSpace(v))
 	}
 }

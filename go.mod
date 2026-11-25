@@ -1,4 +1,4 @@
-module git.hkr.lan/thijs/quicktable
+module github.com/TheDevtop/quicktable
 
 go 1.27.4
 

@@ -27,6 +27,7 @@ var (
 	ErrRowNotFound    = errors.New("row not found")
 	ErrColumnNotFound = errors.New("column not found")
 	ErrCorruptData    = errors.New("corrupted binary data encountered in storage")
+	ErrKeysExhausted  = errors.New("could not generate an unused row key")
 )
 
 // Key separator byte (0x00) used to form composite keys safely because
@@ -75,14 +76,6 @@ func Open(opts Options) (*DB, error) {
 	return &DB{bdb: bdb}, nil
 }
 
-// SetLogger updates the active Badger logger on the underlying database options.
-// Note: Badger reads the logger at Open time, so pass Options.Logger to Open() for full runtime logging.
-func (db *DB) SetLogger(logger badger.Logger) {
-	if db.bdb != nil {
-		db.bdb.Opts().WithLogger(logger)
-	}
-}
-
 // Close cleanly shuts down the underlying Badger database.
 func (db *DB) Close() error {
 	return db.bdb.Close()
@@ -92,7 +85,7 @@ func (db *DB) Close() error {
 // Validation Helpers
 // ============================================================================
 
-// hasWhitespace checks if a string contains any Unicode whitespace or null bytes.
+// hasWhitespaceOrNull checks if a string contains any Unicode whitespace or null bytes.
 func hasWhitespaceOrNull(s string) bool {
 	for _, r := range s {
 		if unicode.IsSpace(r) || r == 0 {
@@ -364,17 +357,53 @@ func (db *DB) SetCell(table, rowKey, column string, value any) error {
 	})
 }
 
-// InsertRow generates a new random 8-digit hex RowKey and atomically inserts the row,
-// returning the newly generated RowKey.
+// insertTries bounds the search for an unused random row key.
+const insertTries = 16
+
+// InsertRow generates a new random 8-digit hex RowKey not yet used in Table and
+// atomically inserts the row, returning the newly generated RowKey.
+// With no columns nothing is stored, as a row exists only while it holds a cell.
 func (db *DB) InsertRow(table string, columns Row) (string, error) {
-	rowKey, err := GenerateRowKey()
-	if err != nil {
+	if err := ValidateTable(table); err != nil {
 		return "", err
 	}
-	if err := db.SetRow(table, rowKey, columns); err != nil {
-		return "", err
+	if len(columns) == 0 {
+		return GenerateRowKey()
 	}
-	return rowKey, nil
+
+	for i := 0; i < insertTries; i++ {
+		rowKey, err := GenerateRowKey()
+		if err != nil {
+			return "", err
+		}
+		entries, err := encodeRow(table, rowKey, columns)
+		if err != nil {
+			return "", err
+		}
+
+		used := false
+		err = db.bdb.Update(func(txn *badger.Txn) error {
+			prefix := encodeRowPrefix(table, rowKey)
+			opts := badger.DefaultIteratorOptions
+			opts.PrefetchValues = false
+			opts.Prefix = prefix
+			it := txn.NewIterator(opts)
+			it.Seek(prefix)
+			used = it.ValidForPrefix(prefix)
+			it.Close()
+			if used {
+				return nil
+			}
+			return writeEntries(txn, entries)
+		})
+		if err != nil {
+			return "", err
+		}
+		if !used {
+			return rowKey, nil
+		}
+	}
+	return "", ErrKeysExhausted
 }
 
 // SetRow atomically inserts or updates multiple columns for a given (Table -> RowKey).
@@ -389,37 +418,47 @@ func (db *DB) SetRow(table, rowKey string, columns Row) error {
 		return nil
 	}
 
-	normalizedRowKey := strings.ToLower(rowKey)
-
-	// Pre-validate and encode all entries before starting the write transaction
-	type kvPair struct {
-		key []byte
-		val []byte
+	entries, err := encodeRow(table, strings.ToLower(rowKey), columns)
+	if err != nil {
+		return err
 	}
-	entries := make([]kvPair, 0, len(columns))
+	return db.bdb.Update(func(txn *badger.Txn) error {
+		return writeEntries(txn, entries)
+	})
+}
 
+// kvPair is an encoded cell ready to be written.
+type kvPair struct {
+	key []byte
+	val []byte
+}
+
+// encodeRow validates and encodes every column of a row before any write starts.
+func encodeRow(table, rowKey string, columns Row) ([]kvPair, error) {
+	entries := make([]kvPair, 0, len(columns))
 	for col, val := range columns {
 		if err := ValidateColumn(col); err != nil {
-			return err
+			return nil, err
 		}
 		encodedVal, err := encodeValue(val)
 		if err != nil {
-			return fmt.Errorf("column %q: %w", col, err)
+			return nil, fmt.Errorf("column %q: %w", col, err)
 		}
 		entries = append(entries, kvPair{
-			key: encodeKey(table, normalizedRowKey, col),
+			key: encodeKey(table, rowKey, col),
 			val: encodedVal,
 		})
 	}
+	return entries, nil
+}
 
-	return db.bdb.Update(func(txn *badger.Txn) error {
-		for _, entry := range entries {
-			if err := txn.Set(entry.key, entry.val); err != nil {
-				return err
-			}
+func writeEntries(txn *badger.Txn, entries []kvPair) error {
+	for _, entry := range entries {
+		if err := txn.Set(entry.key, entry.val); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // GetCell retrieves a single scalar value at (Table -> RowKey -> Column).

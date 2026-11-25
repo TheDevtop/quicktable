@@ -9,7 +9,7 @@ The server uses the **SSE + HTTP POST** transport pattern:
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/mcp/sse` | GET | Open a persistent SSE stream; receive the message endpoint URL |
-| `/mcp/message?sessionId=<id>` | POST | Send JSON-RPC tool calls; responses are delivered over SSE |
+| `/mcp/message?sessionId=<id>` | POST | Send JSON-RPC tool calls; answered `202 Accepted` with no body, responses are delivered over SSE |
 
 ### Session handshake
 
@@ -37,7 +37,7 @@ All tool results are JSON-encoded text. On error, the tool returns a result with
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `table` | string | Table name — non-empty, no whitespace |
-| `rowKey` | string | 8-character hex row key (e.g. `"a3f10c2b"`) |
+| `rowKey` | string | 8-character hex row key (e.g. `"a3f10c2b"`), either case |
 | `column` | string | Column name — non-empty, no whitespace |
 
 ---
@@ -60,9 +60,7 @@ Get a single cell value.
 
 Write a scalar value to a single cell. Creates the row or column if absent.
 
-**Parameters** — `table`, `rowKey`, `column` (all required), plus `value` (any scalar)
-
-> **Note:** `value` is passed as a plain argument, not a declared MCP parameter. Pass it alongside the other arguments in the `arguments` object.
+**Parameters** — `table`, `rowKey`, `column`, `value` (all required); `value` is a number, string or boolean
 
 **Result**
 
@@ -122,6 +120,8 @@ Insert a new row with an auto-generated 8-digit hex key.
 
 **Parameters** — `table` (required), plus optional `columns` object
 
+With no columns a key is returned but nothing is stored, because a row exists only while it holds a cell.
+
 **Result**
 
 ```json
@@ -155,13 +155,29 @@ Scan, filter, and project rows. All parameters except `table` are optional.
 | `table` | string | **Required.** Table to query |
 | `prefix` | string | Filter rows whose key starts with this prefix |
 | `startKey` | string | Inclusive lower bound on row key range |
-| `endKey` | string | Exclusive upper bound on row key range |
+| `endKey` | string | Inclusive upper bound on row key range |
 | `orderDesc` | bool | Sort by key descending (default: ascending) |
 | `offset` | number | Skip the first N matching rows |
 | `limit` | number | Return at most N rows |
 | `countOnly` | bool | Return only a count |
+| `select` | string[] | Columns to return; all columns if omitted |
+| `where` | Predicate[] | Predicates that must all hold |
 
-> **Note:** Column selection (`select`) and `where` predicates are not yet exposed as MCP parameters; use the REST API for predicate-filtered queries.
+A predicate is `{"column": "age", "op": ">=", "value": 18}`. The operators are the same as in the REST API: `=`, `!=`, `>`, `>=`, `<`, `<=`, `CONTAINS`, `PREFIX`, `EXISTS` and `MISSING`; the last two take no `value`. Any other operator is an error. A value of a different kind than the cell never matches, except under `!=`.
+
+**Example arguments**
+
+```json
+{
+  "table": "users",
+  "select": ["email"],
+  "where": [
+    {"column": "age", "op": ">=", "value": 18},
+    {"column": "active", "op": "EXISTS"}
+  ],
+  "limit": 10
+}
+```
 
 **Result** — array of rows
 
@@ -182,7 +198,7 @@ Scan, filter, and project rows. All parameters except `table` are optional.
 
 ### `qte_incr_cell`
 
-Atomically increment an integer or float cell. The cell is initialised to zero if it does not exist. Pass a whole number for integer arithmetic, a decimal for float arithmetic.
+Atomically increment an integer or float cell. The cell is initialised to zero if it does not exist. Float cells stay floats; integer cells stay integers unless `delta` has a fractional part.
 
 **Parameters** — `table`, `rowKey`, `column` (all required), `delta` (number, required)
 
@@ -196,7 +212,7 @@ Atomically increment an integer or float cell. The cell is initialised to zero i
 
 ### `qte_append_cell`
 
-Atomically append a string suffix to a cell value.
+Atomically append a string suffix to a string cell. The cell is created if it does not exist.
 
 **Parameters** — `table`, `rowKey`, `column`, `suffix` (all required)
 
@@ -208,13 +224,25 @@ Atomically append a string suffix to a cell value.
 
 ---
 
+### `qte_prepend_cell`
+
+Atomically prepend a string to a string cell. The cell is created if it does not exist.
+
+**Parameters** — `table`, `rowKey`, `column`, `prefix` (all required)
+
+**Result**
+
+```json
+{"value":"prefix: entry1"}
+```
+
+---
+
 ### `qte_batch_get`
 
 Retrieve multiple rows by their keys in one round-trip.
 
-**Parameters** — `table` (required), plus `rowKeys` (string array, required)
-
-`rowKeys` is passed as a plain argument alongside `table`.
+**Parameters** — `table`, `rowKeys` (string array) (both required)
 
 **Result** — map of rowKey → columns
 
@@ -223,6 +251,80 @@ Retrieve multiple rows by their keys in one round-trip.
   "a3f10c2b": {"email":"alice@example.com"},
   "d81c4f9a": {"email":"bob@example.com"}
 }
+```
+
+---
+
+### `qte_cas`
+
+Atomically check a condition on one column of a row and, if it holds, write columns. Omit `condition` to write unconditionally.
+
+**Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `table` | string | **Required.** |
+| `rowKey` | string | **Required.** |
+| `condition` | object | `{"column": name, "op": op, "value": v}`; operators as in `qte_query` `where` |
+| `setCols` | object | Column name → scalar value pairs to write |
+
+Unknown arguments and unknown `condition` keys are rejected, so a misspelled `condition` cannot become an unconditional write.
+
+**Example arguments**
+
+```json
+{
+  "table": "posts",
+  "rowKey": "a3f10c2b",
+  "condition": {"column": "version", "op": "=", "value": 3},
+  "setCols": {"version": 4, "status": "published"}
+}
+```
+
+**Result**
+
+```json
+{"status":"ok"}
+```
+
+If the condition does not hold, the result is an error `check and put condition failed` and nothing is written.
+
+---
+
+### `qte_batch_write`
+
+Apply several row mutations in one transaction: all succeed or none do.
+
+**Parameters** — `table`, `mutations` (both required)
+
+Each mutation is an object:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `rowKey` | string | **Required.** Target row |
+| `setCols` | object | Columns to set |
+| `delCols` | string[] | Columns to delete; applied before `setCols` |
+| `delete` | bool | If `true`, delete the entire row; `setCols` and `delCols` are ignored |
+
+Unknown keys in a mutation are rejected.
+
+**Example arguments**
+
+```json
+{
+  "table": "users",
+  "mutations": [
+    {"rowKey": "a3f10c2b", "setCols": {"score": 100}},
+    {"rowKey": "d81c4f9a", "delCols": ["temp_field"]},
+    {"rowKey": "ff001122", "delete": true}
+  ]
+}
+```
+
+**Result**
+
+```json
+{"status":"ok"}
 ```
 
 ---
@@ -289,7 +391,10 @@ List the keys of all rows in a table, sorted. Use `qte_get_row` or `qte_query` t
 | `qte_query` | ✓ | | |
 | `qte_incr_cell` | | ✓ | ✓ |
 | `qte_append_cell` | | ✓ | ✓ |
+| `qte_prepend_cell` | | ✓ | ✓ |
 | `qte_batch_get` | ✓ | | |
+| `qte_cas` | ✓ | ✓ | ✓ |
+| `qte_batch_write` | | ✓ | ✓ |
 | `qte_list_tables` | ✓ | | |
 | `qte_drop_table` | | ✓ | ✓ |
 | `qte_list_rows` | ✓ | | |
@@ -299,9 +404,9 @@ List the keys of all rows in a table, sorted. Use `qte_get_row` or `qte_query` t
 ## Data constraints
 
 - **Table name:** non-empty, no whitespace
-- **Row key:** exactly 8 lowercase hex characters (`[0-9a-f]{8}`)
+- **Row key:** exactly 8 hex characters (`[0-9a-fA-F]{8}`), stored and listed in lowercase
 - **Column name:** non-empty, no whitespace
-- **Cell value:** scalar only — `int`, `int64`, `uint64`, `float64`, `bool`, `string`, or `[]byte`; `null` is rejected
+- **Cell value:** a JSON number, string or boolean; numbers are stored as 64-bit floats; `null`, arrays and objects are rejected
 
 ## Error handling
 
@@ -317,4 +422,6 @@ Tool errors are returned as MCP tool results with `isError: true`. The text cont
 | `value must be a scalar (...)` | Unsupported value type |
 | `cell value is not numeric` | Increment on a non-numeric cell |
 | `cell value is not a string or byte slice` | Append/prepend on wrong type |
+| `unknown comparison operator: ...` | Bad `op` in a `where` predicate or `cas` condition |
+| `unknown argument ...`, `unknown condition key ...`, `mutation N: ...` | Misspelled or malformed `qte_cas` / `qte_batch_write` input |
 | `check and put condition failed` | CAS condition not satisfied |

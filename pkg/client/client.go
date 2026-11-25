@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 )
 
 // Client talks to a Quicktable REST API server.
@@ -60,17 +62,22 @@ type QueryResult struct {
 
 // Mutation describes a single row mutation in a batch write.
 type Mutation struct {
-	RowKey  string   `json:"RowKey"`
-	SetCols Row      `json:"SetCols,omitempty"`
-	DelCols []string `json:"DelCols,omitempty"`
-	Delete  bool     `json:"Delete,omitempty"`
+	RowKey  string   `json:"rowKey"`
+	SetCols Row      `json:"setCols,omitempty"`
+	DelCols []string `json:"delCols,omitempty"`
+	Delete  bool     `json:"delete,omitempty"`
 }
 
 // CASCondition is the check predicate for a check-and-set.
 type CASCondition struct {
-	Column string `json:"Column"`
-	Op     string `json:"Op"`
-	Value  any    `json:"Value,omitempty"`
+	Column string `json:"column"`
+	Op     string `json:"op"`
+	Value  any    `json:"value,omitempty"`
+}
+
+// Health reports whether the server is up and answering requests.
+func (c *Client) Health() error {
+	return c.get("/health", nil)
 }
 
 // --- Table operations ---
@@ -87,7 +94,7 @@ func (c *Client) ListTables() ([]string, error) {
 // DropTable permanently deletes a table and all of its rows.
 // Dropping a table that does not exist is not an error.
 func (c *Client) DropTable(table string) error {
-	return c.del(fmt.Sprintf("/api/tables/%s", table), nil)
+	return c.del(apiPath(table), nil)
 }
 
 // ListRows returns the keys of all rows in a table, sorted.
@@ -95,7 +102,7 @@ func (c *Client) ListRows(table string) ([]string, error) {
 	var resp struct {
 		Rows []string `json:"rows"`
 	}
-	err := c.get(fmt.Sprintf("/api/tables/%s/rows", table), &resp)
+	err := c.get(apiPath(table, "rows"), &resp)
 	return resp.Rows, err
 }
 
@@ -106,19 +113,19 @@ func (c *Client) GetCell(table, rowKey, column string) (any, error) {
 	var resp struct {
 		Value any `json:"value"`
 	}
-	err := c.get(fmt.Sprintf("/api/tables/%s/rows/%s/columns/%s", table, rowKey, column), &resp)
+	err := c.get(apiPath(table, "rows", rowKey, "columns", column), &resp)
 	return resp.Value, err
 }
 
 // SetCell writes a single cell value.
 func (c *Client) SetCell(table, rowKey, column string, value any) error {
 	body := map[string]any{"value": value}
-	return c.putJSON(fmt.Sprintf("/api/tables/%s/rows/%s/columns/%s", table, rowKey, column), body, nil)
+	return c.putJSON(apiPath(table, "rows", rowKey, "columns", column), body, nil)
 }
 
 // DeleteCell removes a single cell.
 func (c *Client) DeleteCell(table, rowKey, column string) error {
-	return c.del(fmt.Sprintf("/api/tables/%s/rows/%s/columns/%s", table, rowKey, column), nil)
+	return c.del(apiPath(table, "rows", rowKey, "columns", column), nil)
 }
 
 // --- Row operations ---
@@ -128,13 +135,13 @@ func (c *Client) GetRow(table, rowKey string) (Row, error) {
 	var resp struct {
 		Columns Row `json:"columns"`
 	}
-	err := c.get(fmt.Sprintf("/api/tables/%s/rows/%s", table, rowKey), &resp)
+	err := c.get(apiPath(table, "rows", rowKey), &resp)
 	return resp.Columns, err
 }
 
 // SetRow merges columns into a row.
 func (c *Client) SetRow(table, rowKey string, cols Row) error {
-	return c.putJSON(fmt.Sprintf("/api/tables/%s/rows/%s", table, rowKey), cols, nil)
+	return c.putJSON(apiPath(table, "rows", rowKey), cols, nil)
 }
 
 // InsertRow creates a new row with an auto-generated key.
@@ -142,13 +149,13 @@ func (c *Client) InsertRow(table string, cols Row) (string, error) {
 	var resp struct {
 		RowKey string `json:"rowKey"`
 	}
-	err := c.postJSON(fmt.Sprintf("/api/tables/%s/rows", table), cols, &resp)
+	err := c.postJSON(apiPath(table, "rows"), cols, &resp)
 	return resp.RowKey, err
 }
 
 // DeleteRow removes an entire row.
 func (c *Client) DeleteRow(table, rowKey string) error {
-	return c.del(fmt.Sprintf("/api/tables/%s/rows/%s", table, rowKey), nil)
+	return c.del(apiPath(table, "rows", rowKey), nil)
 }
 
 // --- Query ---
@@ -160,7 +167,7 @@ func (c *Client) Query(table string, q *QueryRequest) (*QueryResult, error) {
 		body = q
 	}
 	var resp QueryResult
-	err := c.postJSON(fmt.Sprintf("/api/tables/%s/query", table), body, &resp)
+	err := c.postJSON(apiPath(table, "query"), body, &resp)
 	return &resp, err
 }
 
@@ -175,7 +182,7 @@ func (c *Client) BatchGet(table string, keys []string) (map[string]Row, error) {
 	var resp struct {
 		Rows map[string]Row `json:"rows"`
 	}
-	err := c.postJSON(fmt.Sprintf("/api/tables/%s/batch", table), body, &resp)
+	err := c.postJSON(apiPath(table, "batch"), body, &resp)
 	return resp.Rows, err
 }
 
@@ -185,7 +192,7 @@ func (c *Client) BatchWrite(table string, mutations []Mutation) error {
 		"action":    "write",
 		"mutations": mutations,
 	}
-	return c.postJSON(fmt.Sprintf("/api/tables/%s/batch", table), body, nil)
+	return c.postJSON(apiPath(table, "batch"), body, nil)
 }
 
 // BatchDelete deletes multiple rows by key.
@@ -194,7 +201,7 @@ func (c *Client) BatchDelete(table string, keys []string) error {
 		"action":  "delete",
 		"rowKeys": keys,
 	}
-	return c.postJSON(fmt.Sprintf("/api/tables/%s/batch", table), body, nil)
+	return c.postJSON(apiPath(table, "batch"), body, nil)
 }
 
 // --- Atomic operations ---
@@ -208,7 +215,7 @@ func (c *Client) Incr(table, rowKey, column string, delta any) (any, error) {
 	var resp struct {
 		Value any `json:"value"`
 	}
-	err := c.postJSON(fmt.Sprintf("/api/tables/%s/rows/%s/incr", table, rowKey), body, &resp)
+	err := c.postJSON(apiPath(table, "rows", rowKey, "incr"), body, &resp)
 	return resp.Value, err
 }
 
@@ -221,7 +228,7 @@ func (c *Client) Append(table, rowKey, column string, value any) (any, error) {
 	var resp struct {
 		Value any `json:"value"`
 	}
-	err := c.postJSON(fmt.Sprintf("/api/tables/%s/rows/%s/append", table, rowKey), body, &resp)
+	err := c.postJSON(apiPath(table, "rows", rowKey, "append"), body, &resp)
 	return resp.Value, err
 }
 
@@ -234,7 +241,7 @@ func (c *Client) Prepend(table, rowKey, column string, value any) (any, error) {
 	var resp struct {
 		Value any `json:"value"`
 	}
-	err := c.postJSON(fmt.Sprintf("/api/tables/%s/rows/%s/prepend", table, rowKey), body, &resp)
+	err := c.postJSON(apiPath(table, "rows", rowKey, "prepend"), body, &resp)
 	return resp.Value, err
 }
 
@@ -244,10 +251,19 @@ func (c *Client) CAS(table, rowKey string, cond *CASCondition, setCols Row) erro
 	if cond != nil {
 		body["condition"] = cond
 	}
-	return c.postJSON(fmt.Sprintf("/api/tables/%s/rows/%s/cas", table, rowKey), body, nil)
+	return c.postJSON(apiPath(table, "rows", rowKey, "cas"), body, nil)
 }
 
 // --- HTTP helpers ---
+
+// apiPath joins escaped segments under /api/tables, so names may contain / or ?.
+func apiPath(segs ...string) string {
+	esc := make([]string, len(segs))
+	for i, s := range segs {
+		esc[i] = url.PathEscape(s)
+	}
+	return "/api/tables/" + strings.Join(esc, "/")
+}
 
 // apiError is returned when the server responds with a non-success status.
 type apiError struct {

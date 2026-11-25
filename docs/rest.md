@@ -1,10 +1,10 @@
 # Quicktable REST API
 
-All endpoints are under `/api/tables`. Every response body is JSON with `Content-Type: application/json`.
+All endpoints except [`/health`](#health) are under `/api/tables`. Every response body is JSON with `Content-Type: application/json`.
 
-**Row keys** are 8-character lowercase hexadecimal strings (e.g. `"a3f10c2b"`). The engine auto-generates one when you insert a row.
+**Row keys** are 8-character hexadecimal strings (e.g. `"a3f10c2b"`). Either case is accepted; keys are stored and listed in lowercase. The engine auto-generates one when you insert a row.
 
-**Cell values** must be a scalar: `int`, `float64`, `bool`, `string`, or base64-encoded bytes. `null` is not accepted.
+**Cell values** must be a JSON number, string or boolean. Numbers are stored as 64-bit floats, so integers above 2^53 lose precision. `null`, arrays and objects are rejected.
 
 ---
 
@@ -18,10 +18,26 @@ All errors return a JSON body with a single `"error"` key.
 
 | HTTP status | Cause |
 |-------------|-------|
-| 400 Bad Request | Invalid table name, row key, column name, unsupported value type, or malformed JSON |
+| 400 Bad Request | Invalid table name, row key, column name or operator, unsupported value type, wrong cell type for `incr`/`append`/`prepend`, or malformed JSON |
 | 404 Not Found | Row or column does not exist |
 | 409 Conflict | A `cas` condition check failed |
 | 500 Internal Server Error | Unexpected storage error |
+
+---
+
+## Health
+
+```
+GET /health
+```
+
+Returns `200` whenever the server is accepting requests. Use it for liveness and readiness probes.
+
+**Response 200**
+
+```json
+{ "status": "ok" }
+```
 
 ---
 
@@ -199,7 +215,7 @@ Writes the given columns to an existing row (merge, not replace). Columns not me
 POST /api/tables/{table}/rows
 ```
 
-Creates a new row with an auto-generated key. The body is a JSON object of initial column values (may be empty `{}`).
+Creates a new row with an auto-generated key that is not yet used in the table. The body is a JSON object of initial column values. With an empty body `{}` a key is returned but nothing is stored, because a row exists only while it holds a cell.
 
 **Body**
 
@@ -251,7 +267,7 @@ Scan, filter, and project rows. Send an empty body or omit `Content-Length` to r
 |-------|------|-------------|
 | `prefix` | string | Only rows whose key starts with this prefix |
 | `startKey` | string | Inclusive lower bound on the row key range |
-| `endKey` | string | Exclusive upper bound on the row key range |
+| `endKey` | string | Inclusive upper bound on the row key range |
 | `select` | string[] | Columns to include; all columns returned if omitted |
 | `orderDesc` | bool | Sort rows by key in descending order (default: ascending) |
 | `offset` | int | Skip the first N matching rows |
@@ -277,6 +293,8 @@ Scan, filter, and project rows. Send an empty body or omit `Content-Length` to r
 | `"PREFIX"` | String starts with prefix |
 | `"EXISTS"` | Column is present (no `value` needed) |
 | `"MISSING"` | Column is absent (no `value` needed) |
+
+Any other `op` is rejected with **400**. Numbers compare with numbers, strings with strings and booleans with booleans; a value of a different kind never matches, except under `"!="`.
 
 **Example request**
 
@@ -433,7 +451,7 @@ All atomic operations return the new value after the operation.
 POST /api/tables/{table}/rows/{rowKey}/incr
 ```
 
-Atomically adds `delta` to a numeric cell. Use an integer `delta` for integer cells, a float for float cells. The cell is created at zero if it does not exist.
+Atomically adds `delta` to a numeric cell. Float cells stay floats; integer cells stay integers unless `delta` has a fractional part. The cell is created at zero if it does not exist.
 
 **Body**
 
@@ -455,7 +473,7 @@ Atomically adds `delta` to a numeric cell. Use an integer `delta` for integer ce
 POST /api/tables/{table}/rows/{rowKey}/append
 ```
 
-Atomically appends a string or byte slice to a cell value.
+Atomically appends a string to a string cell. The cell is created if it does not exist.
 
 **Body**
 
@@ -477,7 +495,7 @@ Atomically appends a string or byte slice to a cell value.
 POST /api/tables/{table}/rows/{rowKey}/prepend
 ```
 
-Atomically prepends a string or byte slice to a cell value.
+Atomically prepends a string to a string cell. The cell is created if it does not exist.
 
 **Body**
 
@@ -501,7 +519,7 @@ POST /api/tables/{table}/rows/{rowKey}/cas
 
 Atomically checks a condition on the row and writes columns only if the condition holds. Returns **409 Conflict** if the check fails.
 
-Omit `condition` to write unconditionally.
+Omit `condition` to write unconditionally. Unknown fields in the body are rejected with **400**, so a misspelled `condition` cannot become an unconditional write.
 
 **Body**
 

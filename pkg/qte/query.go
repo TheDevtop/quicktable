@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"reflect"
+	"math"
 	"strings"
 
 	"github.com/dgraph-io/badger/v4"
@@ -15,6 +15,7 @@ var (
 	ErrNonNumericValue = errors.New("cell value is not numeric")
 	ErrNonBinaryValue  = errors.New("cell value is not a string or byte slice")
 	ErrConditionFailed = errors.New("check and put condition failed")
+	ErrInvalidOp       = errors.New("unknown comparison operator")
 )
 
 // CompareOp represents comparison operators for column predicates and conditions.
@@ -33,6 +34,15 @@ const (
 	OpMissing  CompareOp = "MISSING"
 )
 
+// ValidateOp ensures op is one of the known comparison operators.
+func ValidateOp(op CompareOp) error {
+	switch op {
+	case OpEq, OpNeq, OpGt, OpGte, OpLt, OpLte, OpContains, OpPrefix, OpExists, OpMissing:
+		return nil
+	}
+	return fmt.Errorf("%w: %q", ErrInvalidOp, op)
+}
+
 // FilterFunc is a function signature for custom row filtering.
 type FilterFunc func(rowKey string, row Row) bool
 
@@ -45,8 +55,8 @@ type queryPredicate struct {
 
 // QueryRow represents a row returned by a query, containing its key and columns.
 type QueryRow struct {
-	Key     string
-	Columns Row
+	Key     string `json:"rowKey"`
+	Columns Row    `json:"columns"`
 }
 
 // QueryBuilder provides a fluent API for scanning and querying wide-column data.
@@ -146,7 +156,7 @@ func (q *QueryBuilder) Limit(n int) *QueryBuilder {
 
 // Execute runs the query and returns matching rows.
 func (q *QueryBuilder) Execute() ([]QueryRow, error) {
-	if err := ValidateTable(q.table); err != nil {
+	if err := q.validate(); err != nil {
 		return nil, err
 	}
 
@@ -197,7 +207,7 @@ func (q *QueryBuilder) First() (QueryRow, error) {
 
 // Count returns the count of matching rows (ignoring Limit and Offset).
 func (q *QueryBuilder) Count() (int, error) {
-	if err := ValidateTable(q.table); err != nil {
+	if err := q.validate(); err != nil {
 		return 0, err
 	}
 
@@ -216,7 +226,7 @@ func (q *QueryBuilder) Count() (int, error) {
 
 // Delete deletes all rows matching the query predicates and returns the number of deleted rows.
 func (q *QueryBuilder) Delete() (int, error) {
-	if err := ValidateTable(q.table); err != nil {
+	if err := q.validate(); err != nil {
 		return 0, err
 	}
 
@@ -253,6 +263,22 @@ func (q *QueryBuilder) Delete() (int, error) {
 		return 0, err
 	}
 	return len(toDelete), nil
+}
+
+// validate checks the table name and every predicate operator.
+func (q *QueryBuilder) validate() error {
+	if err := ValidateTable(q.table); err != nil {
+		return err
+	}
+	for _, p := range q.predicates {
+		if err := ValidateColumn(p.column); err != nil {
+			return err
+		}
+		if err := ValidateOp(p.op); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // iterateRows scans table keys according to prefix, range, and ordering.
@@ -400,19 +426,21 @@ func evalPredicate(cols Row, p queryPredicate) bool {
 		return false
 	}
 
+	// Values of different kinds are unequal and unordered.
+	cmp, ok := compareValues(val, p.value)
 	switch p.op {
 	case OpEq:
-		return compareValues(val, p.value) == 0
+		return ok && cmp == 0
 	case OpNeq:
-		return compareValues(val, p.value) != 0
+		return !ok || cmp != 0
 	case OpGt:
-		return compareValues(val, p.value) > 0
+		return ok && cmp > 0
 	case OpGte:
-		return compareValues(val, p.value) >= 0
+		return ok && cmp >= 0
 	case OpLt:
-		return compareValues(val, p.value) < 0
+		return ok && cmp < 0
 	case OpLte:
-		return compareValues(val, p.value) <= 0
+		return ok && cmp <= 0
 	case OpContains:
 		sVal, ok1 := val.(string)
 		sTarget, ok2 := p.value.(string)
@@ -427,48 +455,47 @@ func evalPredicate(cols Row, p queryPredicate) bool {
 }
 
 // compareValues compares two scalar values (numbers, strings, booleans, byte slices).
-func compareValues(a, b any) int {
+// It reports false if the values are of kinds that cannot be compared.
+func compareValues(a, b any) (int, bool) {
 	if af, aOk := toFloat64(a); aOk {
 		if bf, bOk := toFloat64(b); bOk {
 			switch {
 			case af < bf:
-				return -1
+				return -1, true
 			case af > bf:
-				return 1
+				return 1, true
 			default:
-				return 0
+				return 0, true
 			}
 		}
 	}
 
 	if as, aOk := a.(string); aOk {
 		if bs, bOk := b.(string); bOk {
-			return strings.Compare(as, bs)
+			return strings.Compare(as, bs), true
 		}
 	}
 
 	if ab, aOk := a.(bool); aOk {
 		if bb, bOk := b.(bool); bOk {
-			if ab == bb {
-				return 0
+			switch {
+			case ab == bb:
+				return 0, true
+			case !ab:
+				return -1, true
+			default:
+				return 1, true
 			}
-			if !ab && bb {
-				return -1
-			}
-			return 1
 		}
 	}
 
 	if ab, aOk := a.([]byte); aOk {
 		if bb, bOk := b.([]byte); bOk {
-			return bytes.Compare(ab, bb)
+			return bytes.Compare(ab, bb), true
 		}
 	}
 
-	if reflect.DeepEqual(a, b) {
-		return 0
-	}
-	return -1
+	return 0, false
 }
 
 func toFloat64(v any) (float64, bool) {
@@ -823,6 +850,72 @@ func (db *DB) IncrCellFloat(table, rowKey, column string, delta float64) (float6
 	return newVal, nil
 }
 
+// Incr atomically adds delta to a numeric cell and returns the new value.
+// The cell keeps its type: float cells use float arithmetic, integer cells
+// integer arithmetic, unless delta has a fractional part, which makes the result a float.
+// If the cell does not exist, it is initialized to delta.
+func (db *DB) Incr(table, rowKey, column string, delta float64) (any, error) {
+	if err := ValidateTable(table); err != nil {
+		return nil, err
+	}
+	if err := ValidateRowKey(rowKey); err != nil {
+		return nil, err
+	}
+	if err := ValidateColumn(column); err != nil {
+		return nil, err
+	}
+
+	normKey := strings.ToLower(rowKey)
+	k := encodeKey(table, normKey, column)
+	var newVal any
+
+	err := db.bdb.Update(func(txn *badger.Txn) error {
+		var curVal any = int64(0)
+		item, err := txn.Get(k)
+		if err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+			return err
+		}
+		if err == nil {
+			err = item.Value(func(raw []byte) error {
+				dec, err := decodeValue(raw)
+				if err != nil {
+					return err
+				}
+				curVal = dec
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		}
+
+		if f, ok := curVal.(float64); ok {
+			newVal = f + delta
+		} else {
+			n, ok := toInt64(curVal)
+			if !ok {
+				return ErrNonNumericValue
+			}
+			if delta != math.Trunc(delta) {
+				newVal = float64(n) + delta
+			} else {
+				newVal = n + int64(delta)
+			}
+		}
+
+		enc, err := encodeValue(newVal)
+		if err != nil {
+			return err
+		}
+		return txn.Set(k, enc)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return newVal, nil
+}
+
 // AppendCell atomically appends a string or byte slice suffix to an existing cell value.
 // If the cell does not exist, it is initialized with suffix.
 // Returns the resulting concatenated value (string or []byte matching the type of suffix).
@@ -846,6 +939,11 @@ func (db *DB) modifyStringOrBytes(table, rowKey, column string, val any, prepend
 	}
 	if err := ValidateColumn(column); err != nil {
 		return nil, err
+	}
+	switch val.(type) {
+	case string, []byte:
+	default:
+		return nil, ErrNonBinaryValue
 	}
 
 	normKey := strings.ToLower(rowKey)
@@ -935,6 +1033,14 @@ func (db *DB) CheckAndSet(table, rowKey string, cond *Condition, setCols Row) er
 	if len(setCols) == 0 && cond == nil {
 		return nil
 	}
+	if cond != nil {
+		if err := ValidateColumn(cond.Column); err != nil {
+			return err
+		}
+		if err := ValidateOp(cond.Op); err != nil {
+			return err
+		}
+	}
 
 	normKey := strings.ToLower(rowKey)
 
@@ -960,9 +1066,6 @@ func (db *DB) CheckAndSet(table, rowKey string, cond *Condition, setCols Row) er
 
 	return db.bdb.Update(func(txn *badger.Txn) error {
 		if cond != nil {
-			if err := ValidateColumn(cond.Column); err != nil {
-				return err
-			}
 			ck := encodeKey(table, normKey, cond.Column)
 			item, err := txn.Get(ck)
 

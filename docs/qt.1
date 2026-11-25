@@ -34,6 +34,10 @@ so quote them for the shell.
 The
 .B -addr
 flag must precede the command.
+.SS Server
+.TP
+.B health
+Exit 0 if the server is up and answering requests, 1 otherwise.
 .SS Tables
 .TP
 .B list-tables
@@ -52,11 +56,13 @@ Print the value of one cell.
 .BI set-cell " table rowkey column json-value"
 Set one cell to
 .IR json-value ,
-any JSON literal:
+a JSON number, string or boolean:
 .BR 42 ,
 .BR '"text"' ,
-.BR true ,
-.BR '[1,2]' .
+.BR true .
+Arrays, objects and
+.B null
+are rejected.
 .TP
 .BI del-cell " table rowkey column"
 Remove one cell.
@@ -78,10 +84,11 @@ into the row.
 Columns not named are left alone.
 .TP
 .BI insert-row " table \fR[\fPjson-columns\fR]"
-Create a row with a server-generated key and print the key.
+Create a row with a server-generated, unused key and print the key.
 Without
 .I json-columns
-the row is created empty.
+only the key is printed:
+a row exists only while it holds a cell.
 .TP
 .BI del-row " table rowkey"
 Remove a row.
@@ -134,11 +141,31 @@ array of predicates
 .B countOnly
 boolean; return only
 .BR count .
+With
+.B countOnly
+only
+.B count
+is printed.
 .RE
 .SS Batches
 .TP
 .BI batch-get " table key \fR...\fP"
 Print a JSON object mapping each key to its row.
+.TP
+.BI batch-write " table json-mutations"
+Apply a JSON array of mutations in one transaction:
+all succeed or none do.
+Each mutation is an object with
+.B rowKey
+and any of
+.B setCols
+(object of columns to set),
+.B delCols
+(array of columns to delete first)
+and
+.B delete
+(true removes the whole row).
+Unknown keys are rejected.
 .TP
 .BI batch-delete " table key \fR...\fP"
 Delete every named row.
@@ -169,16 +196,16 @@ is
 where
 .I cond
 is
-.BR "{\(dqColumn\(dq: \fIname\fP, \(dqOp\(dq: \fIop\fP, \(dqValue\(dq: \fIv\fP}" .
+.BR "{\(dqcolumn\(dq: \fIname\fP, \(dqop\(dq: \fIop\fP, \(dqvalue\(dq: \fIv\fP}" .
 If the condition holds, the columns in
 .I columns
 are written to the row atomically.
 Without a condition the write is unconditional.
-The keys
-.B Condition
-and
-.B SetCols
-are accepted as well.
+Keys match regardless of case;
+unknown keys are rejected,
+so a misspelled
+.B condition
+never becomes an unconditional write.
 .SH ENVIRONMENT
 .TP
 .B QUICKTABLE_ADDR
@@ -189,24 +216,25 @@ overrides it.
 Store and read back a counter:
 .IP
 .EX
-qt set-cell stats home hits 0
-qt incr stats home hits 1
-qt get-cell stats home hits
+qt set-cell stats 00000001 hits 0
+qt incr stats 00000001 hits 1
+qt get-cell stats 00000001 hits
 .EE
 .PP
-Insert a user and list the first ten whose key starts with
-.BR u :
+Insert a user and list the names of the first ten adults whose key starts with
+.BR a :
 .IP
 .EX
 qt insert-row users '{"name": "ann", "age": 31}'
-qt query users '{"prefix": "u", "limit": 10, "select": ["name"]}'
+qt query users '{"prefix": "a", "limit": 10, "select": ["name"],
+	"where": [{"column": "age", "op": ">=", "value": 18}]}'
 .EE
 .PP
 Rename only if the name is unchanged:
 .IP
 .EX
-qt cas users u1 '{"condition": {"Column": "name", "Op": "=",
-	"Value": "ann"}, "setCols": {"name": "anna"}}'
+qt cas users a3f10c2b '{"condition": {"column": "name", "op": "=",
+	"value": "ann"}, "setCols": {"name": "anna"}}'
 .EE
 .PP
 Talk to another server:
@@ -219,6 +247,7 @@ QUICKTABLE_ADDR=http://db:16000 qt list-tables
 .br
 .B pkg/client
 .SH SEE ALSO
+.IR quicktable (1),
 .I docs/rest.md
 for the REST API and the operators accepted in
 .B where
@@ -231,13 +260,3 @@ Exit status is 0 on success,
 reported as
 .B "error: quicktable: \fIstatus message\fP" ,
 and 2 on a usage error.
-.SH BUGS
-Table names, row keys and columns are put into the URL path without escaping,
-so names containing
-.B /
-or
-.B ?
-misbehave.
-.PP
-.I Cas
-silently treats a body that fails to decode as unconditional.

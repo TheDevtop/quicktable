@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"git.hkr.lan/thijs/quicktable/pkg/qte"
+	"github.com/TheDevtop/quicktable/pkg/qte"
 )
 
 // writeJSON writes a JSON response with status code and Content-Type header.
@@ -28,7 +28,8 @@ func writeQTEError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, qte.ErrInvalidTable), errors.Is(err, qte.ErrInvalidRowKey),
 		errors.Is(err, qte.ErrInvalidColumn), errors.Is(err, qte.ErrUnsupportedVal),
-		errors.Is(err, qte.ErrNonNumericValue), errors.Is(err, qte.ErrNonBinaryValue):
+		errors.Is(err, qte.ErrNonNumericValue), errors.Is(err, qte.ErrNonBinaryValue),
+		errors.Is(err, qte.ErrInvalidOp):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, qte.ErrConditionFailed):
 		writeError(w, http.StatusConflict, err.Error())
@@ -40,6 +41,11 @@ func writeQTEError(w http.ResponseWriter, err error) {
 // RegisterRESTRoutes registers all wide-column REST API handlers onto the given ServeMux.
 func RegisterRESTRoutes(mux *http.ServeMux, db *qte.DB) {
 	h := &restHandler{db: db}
+
+	// Liveness: answers whenever the server is serving requests.
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	})
 
 	// Table operations: /api/tables, /api/tables/{table}
 	mux.HandleFunc("GET /api/tables", h.handleListTables)
@@ -390,27 +396,18 @@ func (h *restHandler) handleIncr(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch d := req.Delta.(type) {
-	case float64:
-		// Check if it's an integer value or floating point
-		if float64(int64(d)) == d {
-			newVal, err := h.db.IncrCell(table, rowKey, req.Column, int64(d))
-			if err != nil {
-				writeQTEError(w, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]any{"value": newVal})
-		} else {
-			newVal, err := h.db.IncrCellFloat(table, rowKey, req.Column, d)
-			if err != nil {
-				writeQTEError(w, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]any{"value": newVal})
-		}
-	default:
+	delta, ok := req.Delta.(float64)
+	if !ok {
 		writeError(w, http.StatusBadRequest, "delta must be numeric")
+		return
 	}
+
+	newVal, err := h.db.Incr(table, rowKey, req.Column, delta)
+	if err != nil {
+		writeQTEError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"value": newVal})
 }
 
 // POST /api/tables/{table}/rows/{rowKey}/append
@@ -466,8 +463,11 @@ func (h *restHandler) handleCAS(w http.ResponseWriter, r *http.Request) {
 	table := r.PathValue("table")
 	rowKey := r.PathValue("rowKey")
 
+	// Unknown fields are rejected: a misspelled "condition" must not become an unconditional write.
 	var req casReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json cas body: "+err.Error())
 		return
 	}
