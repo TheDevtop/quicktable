@@ -342,15 +342,16 @@ Each item in `rows` has the shape:
 POST /api/tables/{table}/batch
 ```
 
-Multi-row read, write, or delete in a single request. Unknown fields in the body or in a mutation are rejected with **400**, so a misspelled `setCols` is not silently dropped.
+Multi-row read, write, delete, or insert in a single request. Unknown fields in the body or in a mutation are rejected with **400**, so a misspelled `setCols` is not silently dropped.
 
 **Body**
 
 ```json
 {
-  "action": "write" | "get" | "delete",
+  "action": "write" | "get" | "delete" | "insert",
   "rowKeys": ["..."],
-  "mutations": [...]
+  "mutations": [...],
+  "rows": [...]
 }
 ```
 
@@ -437,6 +438,31 @@ Delete multiple rows.
 
 ```json
 { "status": "ok" }
+```
+
+---
+
+### Batch insert
+
+Insert multiple rows atomically, each under a new auto-generated key that is not yet used in the table. The keys are returned in the order of `rows`. An empty row `{}` gets a key but stores nothing, as with [Insert a row](#insert-a-row).
+
+```json
+{
+  "action": "insert",
+  "rows": [
+    { "email": "alice@example.com", "score": 0 },
+    { "email": "bob@example.com" }
+  ]
+}
+```
+
+**Response 201**
+
+```json
+{
+  "table": "users",
+  "rowKeys": ["a3f10c2b", "d81c4f9a"]
+}
 ```
 
 ---

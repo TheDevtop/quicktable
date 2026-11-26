@@ -377,6 +377,34 @@ List the keys of all rows in a table, sorted. Use `qte_get_row` or `qte_query` t
 
 ---
 
+### `qte_batch_insert`
+
+Insert several rows in one transaction, each under a new auto-generated 8-digit hex key: all succeed or none do.
+
+**Parameters** — `table`, `rows` (array of column objects) (both required)
+
+An empty row `{}` gets a key but stores nothing, as with `qte_insert_row`.
+
+**Example arguments**
+
+```json
+{
+  "table": "users",
+  "rows": [
+    {"email": "alice@example.com", "score": 0},
+    {"email": "bob@example.com"}
+  ]
+}
+```
+
+**Result** — keys in the order of `rows`
+
+```json
+{"rowKeys":["a3f10c2b","d81c4f9a"]}
+```
+
+---
+
 ## Tool summary
 
 | Tool | Reads | Writes | Atomic |
@@ -395,6 +423,7 @@ List the keys of all rows in a table, sorted. Use `qte_get_row` or `qte_query` t
 | `qte_batch_get` | ✓ | | |
 | `qte_cas` | ✓ | ✓ | ✓ |
 | `qte_batch_write` | | ✓ | ✓ |
+| `qte_batch_insert` | | ✓ | ✓ |
 | `qte_list_tables` | ✓ | | |
 | `qte_drop_table` | | ✓ | ✓ |
 | `qte_list_rows` | ✓ | | |

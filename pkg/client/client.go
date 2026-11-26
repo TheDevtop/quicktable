@@ -195,6 +195,20 @@ func (c *Client) BatchWrite(table string, mutations []Mutation) error {
 	return c.postJSON(apiPath(table, "batch"), body, nil)
 }
 
+// BatchInsert inserts multiple rows atomically under new auto-generated keys,
+// returned in the order of rows.
+func (c *Client) BatchInsert(table string, rows []Row) ([]string, error) {
+	body := map[string]any{
+		"action": "insert",
+		"rows":   rows,
+	}
+	var resp struct {
+		RowKeys []string `json:"rowKeys"`
+	}
+	err := c.postJSON(apiPath(table, "batch"), body, &resp)
+	return resp.RowKeys, err
+}
+
 // BatchDelete deletes multiple rows by key.
 func (c *Client) BatchDelete(table string, keys []string) error {
 	body := map[string]any{

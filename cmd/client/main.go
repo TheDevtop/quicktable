@@ -53,6 +53,8 @@ func main() {
 		err = cmdBatchWrite(c, args[1:])
 	case "batch-delete":
 		err = cmdBatchDelete(c, args[1:])
+	case "batch-insert":
+		err = cmdBatchInsert(c, args[1:])
 	case "incr":
 		err = cmdIncr(c, args[1:])
 	case "append":
@@ -91,6 +93,7 @@ commands:
   batch-get   <table> <key> [key...]
   batch-write <table> <json-mutations>
   batch-delete <table> <key> [key...]
+  batch-insert <table> <json-rows>
   incr        <table> <rowKey> <column> <delta>
   append      <table> <rowKey> <column> <value>
   prepend     <table> <rowKey> <column> <value>
@@ -273,6 +276,22 @@ func cmdBatchWrite(c *client.Client, args []string) error {
 func cmdBatchDelete(c *client.Client, args []string) error {
 	needArgs(args, 2, "batch-delete")
 	return c.BatchDelete(args[0], args[1:])
+}
+
+func cmdBatchInsert(c *client.Client, args []string) error {
+	needArgs(args, 2, "batch-insert")
+	var rows []client.Row
+	if err := json.Unmarshal([]byte(args[1]), &rows); err != nil {
+		return fmt.Errorf("invalid json rows: %w", err)
+	}
+	keys, err := c.BatchInsert(args[0], rows)
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		fmt.Println(k)
+	}
+	return nil
 }
 
 func cmdIncr(c *client.Client, args []string) error {

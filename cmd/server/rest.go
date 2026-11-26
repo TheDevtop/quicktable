@@ -319,9 +319,10 @@ func (h *restHandler) handleQuery(w http.ResponseWriter, r *http.Request) {
 
 // BatchRequest models POST /api/tables/{table}/batch
 type BatchRequest struct {
-	Action    string              `json:"action"` // "write", "get", "delete"
+	Action    string              `json:"action"` // "write", "get", "delete", "insert"
 	RowKeys   []string            `json:"rowKeys,omitempty"`
 	Mutations []qte.BatchMutation `json:"mutations,omitempty"`
+	Rows      []qte.Row           `json:"rows,omitempty"`
 }
 
 // POST /api/tables/{table}/batch
@@ -360,8 +361,18 @@ func (h *restHandler) handleBatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	case "insert":
+		keys, err := h.db.BatchInsert(table, req.Rows)
+		if err != nil {
+			writeQTEError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"table":   table,
+			"rowKeys": keys,
+		})
 	default:
-		writeError(w, http.StatusBadRequest, "unknown batch action, must be 'write', 'get', or 'delete'")
+		writeError(w, http.StatusBadRequest, "unknown batch action, must be 'write', 'get', 'delete' or 'insert'")
 	}
 }
 

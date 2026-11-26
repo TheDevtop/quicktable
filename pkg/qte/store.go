@@ -350,47 +350,90 @@ func (db *DB) SetCell(table, rowKey, column string, value any) error {
 // insertTries bounds the search for an unused random row key.
 const insertTries = 16
 
-// InsertRow generates a new random 8-digit hex RowKey not yet used in Table and
-// atomically inserts the row, returning the newly generated RowKey.
-// With no columns nothing is stored, as a row exists only while it holds a cell.
+// InsertRow inserts a row under a new random key not yet used in Table,
+// returning the key. With no columns nothing is stored, as a row exists
+// only while it holds a cell.
 func (db *DB) InsertRow(table string, columns Row) (string, error) {
 	if err := ValidateTable(table); err != nil {
 		return "", err
 	}
-	if len(columns) == 0 {
-		return GenerateRowKey()
+	if _, err := encodeRow(table, "", columns); err != nil {
+		return "", err
 	}
+	keys, err := db.insertRows(table, []Row{columns})
+	if err != nil {
+		return "", err
+	}
+	return keys[0], nil
+}
 
-	for i := 0; i < insertTries; i++ {
-		rowKey, err := GenerateRowKey()
-		if err != nil {
-			return "", err
+// BatchInsert atomically inserts rows, each under a new random key not yet
+// used in Table, and returns the keys in the order of rows.
+// Empty rows get a key but store nothing.
+func (db *DB) BatchInsert(table string, rows []Row) ([]string, error) {
+	if err := ValidateTable(table); err != nil {
+		return nil, err
+	}
+	for i, cols := range rows {
+		if _, err := encodeRow(table, "", cols); err != nil {
+			return nil, fmt.Errorf("row %d: %w", i, err)
 		}
-		entries, err := encodeRow(table, rowKey, columns)
-		if err != nil {
-			return "", err
-		}
+	}
+	return db.insertRows(table, rows)
+}
 
-		used := false
-		err = db.bdb.Update(func(txn *badger.Txn) error {
-			prefix := encodeRowPrefix(table, rowKey)
-			opts := badger.DefaultIteratorOptions
-			opts.PrefetchValues = false
-			opts.Prefix = prefix
-			it := txn.NewIterator(opts)
-			it.Seek(prefix)
-			used = it.ValidForPrefix(prefix)
-			it.Close()
-			if used {
-				return nil
+// insertRows stores validated rows under fresh keys in one transaction.
+func (db *DB) insertRows(table string, rows []Row) ([]string, error) {
+	var keys []string
+	err := db.bdb.Update(func(txn *badger.Txn) error {
+		keys = make([]string, 0, len(rows))
+		taken := make(map[string]bool, len(rows))
+		for _, cols := range rows {
+			rk, err := unusedRowKey(txn, table, taken)
+			if err != nil {
+				return err
 			}
-			return writeEntries(txn, entries)
-		})
+			taken[rk] = true
+			keys = append(keys, rk)
+
+			entries, err := encodeRow(table, rk, cols)
+			if err != nil {
+				return err
+			}
+			if err := writeEntries(txn, entries); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+// unusedRowKey generates a random row key that holds no cells in table
+// and is not in taken; taken covers keys of empty rows, which store nothing.
+func unusedRowKey(txn *badger.Txn, table string, taken map[string]bool) (string, error) {
+	for i := 0; i < insertTries; i++ {
+		rk, err := GenerateRowKey()
 		if err != nil {
 			return "", err
 		}
+		if taken[rk] {
+			continue
+		}
+
+		prefix := encodeRowPrefix(table, rk)
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		opts.Prefix = prefix
+		it := txn.NewIterator(opts)
+		it.Seek(prefix)
+		used := it.ValidForPrefix(prefix)
+		it.Close()
 		if !used {
-			return rowKey, nil
+			return rk, nil
 		}
 	}
 	return "", ErrKeysExhausted
