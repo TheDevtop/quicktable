@@ -137,7 +137,7 @@ func apply(txn *badger.Txn, o op) error {
 			return err
 		}
 		if !o.cond.holds(b) {
-			return fmt.Errorf("%w: %q %v", ErrCondition, o.key, o.cond.op)
+			return fmt.Errorf("%w: %s", ErrCondition, path(o.key))
 		}
 		return nil
 	case opIncr:
@@ -189,7 +189,7 @@ func incr(txn *badger.Txn, k []byte, delta float64) (float64, error) {
 		}
 		f, isNum := v.(float64)
 		if !isNum {
-			return 0, fmt.Errorf("%w: counter %q is %T", ErrType, k, v)
+			return 0, fmt.Errorf("%w: %s is %T, not a number", ErrType, path(k), v)
 		}
 		n = f
 	}

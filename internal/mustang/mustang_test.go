@@ -166,6 +166,47 @@ func TestQuery(t *testing.T) {
 	}
 }
 
+// TestSelect checks that, as in Bigtable, rows without any selected
+// column are dropped, and that limit counts only rows returned.
+func TestSelect(t *testing.T) {
+	s := open(t)
+	load(t, s, "u", Table{
+		"a": {"name": "ann"},
+		"b": {"age": 10.0},
+		"c": {"name": "cid", "age": 30.0},
+		"d": {"name": "dan"},
+	})
+	cases := []struct {
+		q    *Query
+		want string
+	}{
+		{s.Query("u").Select("age"), "[b c]"},
+		{s.Query("u").Select("age", "name"), "[a b c d]"},
+		{s.Query("u").Select("nope"), "[]"},
+		{s.Query("u").Select("name").Limit(2), "[a c]"},
+		{s.Query("u").Where("name", Exists, nil).Select("age"), "[c]"},
+	}
+	for i, c := range cases {
+		rs, err := c.q.Run()
+		if err != nil {
+			t.Fatal(i, err)
+		}
+		var ks []string
+		for _, r := range rs {
+			ks = append(ks, r.Key)
+		}
+		if got := "[" + strings.Join(ks, " ") + "]"; got != c.want {
+			t.Errorf("case %d: got %s want %s", i, got, c.want)
+		}
+	}
+	if n, _ := s.Query("u").Select("age").Count(); n != 4 {
+		t.Fatal("count ignores select", n)
+	}
+	if v, _ := s.Query("u").Limit(1).Sum("age"); v != 10.0 {
+		t.Fatal("limit counts rows with the column", v)
+	}
+}
+
 func TestIf(t *testing.T) {
 	s := open(t)
 	// Create only if absent.
@@ -173,7 +214,7 @@ func TestIf(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := s.Batch().If("a", "x", "v", Missing, nil).Set("a", "x", "v", 9.0).Commit()
-	if !errors.Is(err, ErrCondition) {
+	if !errors.Is(err, ErrCondition) || err.Error() != "mustang: condition failed: a/x/v" {
 		t.Fatal(err)
 	}
 	// Compare-and-set.

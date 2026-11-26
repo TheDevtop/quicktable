@@ -147,6 +147,7 @@ func (q *Query) Where(col string, op Op, val Value) *Query {
 }
 
 // Select limits the returned columns; by default all are returned.
+// As in Bigtable, a row with none of the selected columns is dropped.
 func (q *Query) Select(cols ...string) *Query {
 	if err := checkNames(cols...); err != nil {
 		return q.fail(err)
@@ -160,7 +161,7 @@ func (q *Query) Select(cols ...string) *Query {
 	return q
 }
 
-// Limit stops after n matching rows; 0 means no limit.
+// Limit stops after n returned rows; 0 means no limit.
 func (q *Query) Limit(n int) *Query {
 	q.limit = n
 	return q
@@ -272,9 +273,6 @@ func (q *Query) fold(col string, fn func(k, b []byte) error) error {
 		return err
 	}
 	return q.scan(map[string]bool{col: true}, func(k []byte, cells []cell) error {
-		if len(cells) == 0 {
-			return nil
-		}
 		return fn(k, cells[0].val)
 	})
 }
@@ -288,7 +286,9 @@ var errStop = errors.New("stop")
 
 // scan calls fn with the key of every matching row, up to the limit,
 // and the cells of its columns in out; a nil out keeps every column.
-// Only condition and out columns are read. Arguments to fn are only
+// A row with none of the out columns is skipped and not counted, but
+// an empty out keeps every row with no cells. Only condition and out
+// columns are read. Arguments to fn are only
 // valid during the call.
 func (q *Query) scan(out map[string]bool, fn func(k []byte, cells []cell) error) error {
 	if q.err != nil {
@@ -332,6 +332,9 @@ func (q *Query) scan(out map[string]bool, fn func(k []byte, cells []cell) error)
 				if !hit[i] && !cd.holds(nil) {
 					return nil
 				}
+			}
+			if len(out) > 0 && len(cells) == 0 {
+				return nil
 			}
 			if err := fn(cur, cells); err != nil {
 				return err

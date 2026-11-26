@@ -82,6 +82,11 @@ func key(names ...string) []byte {
 	return buf.Bytes()
 }
 
+// path renders a key as table/row/col for error messages.
+func path(k []byte) string {
+	return string(bytes.ReplaceAll(bytes.TrimSuffix(k, []byte{sep}), []byte{sep}, []byte("/")))
+}
+
 // Name levels within a cell key.
 const (
 	lvlTable = iota
