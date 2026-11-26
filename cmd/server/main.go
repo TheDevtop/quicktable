@@ -11,8 +11,9 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
+	"github.com/dgraph-io/badger/v4"
 
-	"github.com/TheDevtop/quicktable/pkg/qte"
+	"github.com/TheDevtop/quicktable/internal/mustang"
 )
 
 // charmLogger adds Warningf to Charm's logger so it also serves as a badger.Logger.
@@ -56,18 +57,18 @@ func run() error {
 
 	logger.Info("starting quicktable server", "addr", *addr, "inMemory", *inMemory, "dir", *dataDir)
 
-	// 2. Open QTE Database with the same logger instance
-	db, err := qte.Open(qte.Options{
-		Dir:      *dataDir,
-		InMemory: *inMemory,
-		Logger:   logger,
-	})
+	// 2. Open the Mustang store with the same logger instance
+	opt := badger.DefaultOptions(*dataDir)
+	if *inMemory {
+		opt = badger.DefaultOptions("").WithInMemory(true)
+	}
+	s, err := mustang.Open(opt.WithLogger(logger))
 	if err != nil {
-		logger.Error("failed to open wide-column engine", "err", err)
+		logger.Error("failed to open mustang store", "err", err)
 		return err
 	}
 	defer func() {
-		if err := db.Close(); err != nil {
+		if err := s.Close(); err != nil {
 			logger.Error("error closing database", "err", err)
 		} else {
 			logger.Info("database closed cleanly")
@@ -76,8 +77,8 @@ func run() error {
 
 	// 3. Register HTTP Routes (REST + MCP)
 	mux := http.NewServeMux()
-	RegisterRESTRoutes(mux, db)
-	mcpHandler := RegisterMCPRoutes(mux, db)
+	RegisterRESTRoutes(mux, s)
+	RegisterMCPRoutes(mux, s)
 
 	srv := &http.Server{
 		Addr:         *addr,
@@ -86,8 +87,6 @@ func run() error {
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
-	// SSE streams never go idle, so end them or Shutdown waits for its full timeout.
-	srv.RegisterOnShutdown(mcpHandler.Close)
 
 	// 4. Start HTTP Server in background
 	serverErrCh := make(chan error, 1)
