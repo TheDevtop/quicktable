@@ -12,9 +12,17 @@ import (
 
 	"github.com/charmbracelet/log"
 
-	"github.com/TheDevtop/quicktable/pkg/logwrap"
 	"github.com/TheDevtop/quicktable/pkg/qte"
 )
+
+// charmLogger adds Warningf to Charm's logger so it also serves as a badger.Logger.
+type charmLogger struct {
+	*log.Logger
+}
+
+func (l charmLogger) Warningf(format string, args ...any) {
+	l.Warnf(format, args...)
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -31,11 +39,11 @@ func run() error {
 	debug := flag.Bool("debug", false, "Enable debug level logging")
 	flag.Parse()
 
-	// 1. Setup unified logwrap Logger (wraps charm.sh logger and implements badger.Logger)
-	logger := logwrap.NewWithOptions(os.Stderr, log.Options{
+	// 1. Setup one logger for the server and Badger
+	logger := charmLogger{log.NewWithOptions(os.Stderr, log.Options{
 		ReportTimestamp: true,
 		TimeFormat:      "2006-01-02 15:04:05",
-	})
+	})}
 	if *debug {
 		logger.SetLevel(log.DebugLevel)
 	} else {

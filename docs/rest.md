@@ -342,15 +342,16 @@ Each item in `rows` has the shape:
 POST /api/tables/{table}/batch
 ```
 
-Multi-row read, write, or delete in a single request.
+Multi-row read, write, delete, or insert in a single request. Unknown fields in the body or in a mutation are rejected with **400**, so a misspelled `setCols` is not silently dropped.
 
 **Body**
 
 ```json
 {
-  "action": "write" | "get" | "delete",
+  "action": "write" | "get" | "delete" | "insert",
   "rowKeys": ["..."],
-  "mutations": [...]
+  "mutations": [...],
+  "rows": [...]
 }
 ```
 
@@ -441,6 +442,31 @@ Delete multiple rows.
 
 ---
 
+### Batch insert
+
+Insert multiple rows atomically, each under a new auto-generated key that is not yet used in the table. The keys are returned in the order of `rows`. An empty row `{}` gets a key but stores nothing, as with [Insert a row](#insert-a-row).
+
+```json
+{
+  "action": "insert",
+  "rows": [
+    { "email": "alice@example.com", "score": 0 },
+    { "email": "bob@example.com" }
+  ]
+}
+```
+
+**Response 201**
+
+```json
+{
+  "table": "users",
+  "rowKeys": ["a3f10c2b", "d81c4f9a"]
+}
+```
+
+---
+
 ## Atomic cell operations
 
 All atomic operations return the new value after the operation.
@@ -451,7 +477,7 @@ All atomic operations return the new value after the operation.
 POST /api/tables/{table}/rows/{rowKey}/incr
 ```
 
-Atomically adds `delta` to a numeric cell. Float cells stay floats; integer cells stay integers unless `delta` has a fractional part. The cell is created at zero if it does not exist.
+Atomically adds `delta` to a numeric cell. The cell is created at zero if it does not exist.
 
 **Body**
 

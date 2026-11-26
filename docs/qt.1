@@ -169,6 +169,11 @@ Unknown keys are rejected.
 .TP
 .BI batch-delete " table key \fR...\fP"
 Delete every named row.
+.TP
+.BI batch-insert " table json-rows"
+Insert a JSON array of row objects in one transaction,
+each under a new server-generated key,
+and print the keys one per line in the order of the rows.
 .SS Atomic operations
 .TP
 .BI incr " table rowkey column delta"
@@ -179,7 +184,7 @@ to a numeric cell and print the new value.
 .BI append " table rowkey column value"
 Append
 .I value
-to a string or byte cell and print the new value.
+to a string cell and print the new value.
 .I Value
 is taken literally, not as JSON.
 .TP

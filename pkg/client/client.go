@@ -195,6 +195,20 @@ func (c *Client) BatchWrite(table string, mutations []Mutation) error {
 	return c.postJSON(apiPath(table, "batch"), body, nil)
 }
 
+// BatchInsert inserts multiple rows atomically under new auto-generated keys,
+// returned in the order of rows.
+func (c *Client) BatchInsert(table string, rows []Row) ([]string, error) {
+	body := map[string]any{
+		"action": "insert",
+		"rows":   rows,
+	}
+	var resp struct {
+		RowKeys []string `json:"rowKeys"`
+	}
+	err := c.postJSON(apiPath(table, "batch"), body, &resp)
+	return resp.RowKeys, err
+}
+
 // BatchDelete deletes multiple rows by key.
 func (c *Client) BatchDelete(table string, keys []string) error {
 	body := map[string]any{
@@ -207,39 +221,39 @@ func (c *Client) BatchDelete(table string, keys []string) error {
 // --- Atomic operations ---
 
 // Incr atomically increments a numeric cell and returns the new value.
-func (c *Client) Incr(table, rowKey, column string, delta any) (any, error) {
+func (c *Client) Incr(table, rowKey, column string, delta float64) (float64, error) {
 	body := map[string]any{
 		"column": column,
 		"delta":  delta,
 	}
 	var resp struct {
-		Value any `json:"value"`
+		Value float64 `json:"value"`
 	}
 	err := c.postJSON(apiPath(table, "rows", rowKey, "incr"), body, &resp)
 	return resp.Value, err
 }
 
-// Append atomically appends to a string or byte cell.
-func (c *Client) Append(table, rowKey, column string, value any) (any, error) {
+// Append atomically appends to a string cell.
+func (c *Client) Append(table, rowKey, column, value string) (string, error) {
 	body := map[string]any{
 		"column": column,
 		"value":  value,
 	}
 	var resp struct {
-		Value any `json:"value"`
+		Value string `json:"value"`
 	}
 	err := c.postJSON(apiPath(table, "rows", rowKey, "append"), body, &resp)
 	return resp.Value, err
 }
 
-// Prepend atomically prepends to a string or byte cell.
-func (c *Client) Prepend(table, rowKey, column string, value any) (any, error) {
+// Prepend atomically prepends to a string cell.
+func (c *Client) Prepend(table, rowKey, column, value string) (string, error) {
 	body := map[string]any{
 		"column": column,
 		"value":  value,
 	}
 	var resp struct {
-		Value any `json:"value"`
+		Value string `json:"value"`
 	}
 	err := c.postJSON(apiPath(table, "rows", rowKey, "prepend"), body, &resp)
 	return resp.Value, err

@@ -336,21 +336,13 @@ func registerMCPTools(s *server.MCPServer, db *qte.DB) {
 			limit, _ := req.GetArguments()["limit"].(float64)
 			countOnly, _ := req.GetArguments()["countOnly"].(bool)
 
-			qb := db.Query(table)
-			if prefix != "" {
-				qb.WithPrefix(prefix)
-			}
-			if startKey != "" || endKey != "" {
-				qb.WithKeyRange(startKey, endKey)
-			}
+			qb := db.Query(table).
+				WithPrefix(prefix).
+				WithKeyRange(startKey, endKey).
+				Offset(int(offset)).
+				Limit(int(limit))
 			if orderDesc {
 				qb.OrderDesc()
-			}
-			if offset > 0 {
-				qb.Offset(int(offset))
-			}
-			if limit > 0 {
-				qb.Limit(int(limit))
 			}
 
 			if raw, ok := req.GetArguments()["select"]; ok {
@@ -407,7 +399,7 @@ func registerMCPTools(s *server.MCPServer, db *qte.DB) {
 	// 9. qte_incr_cell
 	s.AddTool(
 		mcp.NewTool("qte_incr_cell",
-			mcp.WithDescription("Atomically increment an integer or float cell value."),
+			mcp.WithDescription("Atomically increment a numeric cell value."),
 			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
 			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
 			mcp.WithString("column", mcp.Required(), mcp.Description("Column name")),
@@ -655,6 +647,40 @@ func registerMCPTools(s *server.MCPServer, db *qte.DB) {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			return mcp.NewToolResultText(`{"status":"ok"}`), nil
+		},
+	)
+
+	// 18. qte_batch_insert
+	s.AddTool(
+		mcp.NewTool("qte_batch_insert",
+			mcp.WithDescription("Insert several rows atomically, each under a new auto-generated 8-digit hex key. "+
+				"Returns the keys in the order of the rows."),
+			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
+			mcp.WithArray("rows", mcp.Required(), mcp.Description("Rows to insert, each an object of column name to scalar value pairs"),
+				mcp.Items(map[string]any{"type": "object"})),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			table, _ := req.GetArguments()["table"].(string)
+			raw, ok := req.GetArguments()["rows"].([]any)
+			if !ok {
+				return mcp.NewToolResultError("rows array required"), nil
+			}
+
+			rows := make([]qte.Row, 0, len(raw))
+			for i, r := range raw {
+				m, ok := r.(map[string]any)
+				if !ok {
+					return mcp.NewToolResultError(fmt.Sprintf("row %d must be an object", i)), nil
+				}
+				rows = append(rows, m)
+			}
+
+			keys, err := db.BatchInsert(table, rows)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			res, _ := json.Marshal(map[string]any{"rowKeys": keys})
+			return mcp.NewToolResultText(string(res)), nil
 		},
 	)
 }
