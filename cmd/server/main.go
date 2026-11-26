@@ -33,10 +33,10 @@ func main() {
 // run serves until a signal or a server error; returning lets the deferred
 // closes run before main exits.
 func run() error {
-	addr := flag.String("addr", ":16000", "Server listen address")
-	dataDir := flag.String("dir", "./data", "Storage directory")
-	inMemory := flag.Bool("in-memory", false, "Run database completely in-memory")
-	debug := flag.Bool("debug", false, "Enable debug level logging")
+	addr := flag.String("a", ":16000", "Server listen address")
+	dataDir := flag.String("d", "./data", "Storage directory")
+	inMemory := flag.Bool("m", false, "Run database completely in-memory")
+	debug := flag.Bool("v", false, "Enable debug level logging")
 	flag.Parse()
 
 	// 1. Setup one logger for the server and Badger
@@ -44,10 +44,9 @@ func run() error {
 		ReportTimestamp: true,
 		TimeFormat:      "2006-01-02 15:04:05",
 	})}
+	logger.SetLevel(log.InfoLevel)
 	if *debug {
 		logger.SetLevel(log.DebugLevel)
-	} else {
-		logger.SetLevel(log.InfoLevel)
 	}
 
 	logger.Info("starting quicktable server", "addr", *addr, "inMemory", *inMemory, "dir", *dataDir)

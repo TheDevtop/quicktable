@@ -31,7 +31,7 @@ WORKDIR /data
 EXPOSE 16000
 
 ENTRYPOINT ["quicktable"]
-CMD ["-addr", ":16000", "-dir", "/data"]
+CMD ["-a", ":16000", "-d", "/data"]
 
 LABEL org.opencontainers.image.source=https://github.com/TheDevtop/quicktable
 LABEL org.opencontainers.image.licenses=MIT
