@@ -14,7 +14,12 @@ var (
 	ErrNonStringValue  = errors.New("cell value is not a string")
 	ErrConditionFailed = errors.New("check and put condition failed")
 	ErrInvalidOp       = errors.New("unknown comparison operator")
+	ErrKeysExhausted   = errors.New("could not generate an unused row key")
 )
+
+// ============================================================================
+// Conditions
+// ============================================================================
 
 // CompareOp represents comparison operators for column predicates and conditions.
 type CompareOp string
@@ -41,7 +46,7 @@ func ValidateOp(op CompareOp) error {
 	return fmt.Errorf("%w: %q", ErrInvalidOp, op)
 }
 
-// Condition is a predicate on one column, used by query filters and CheckAndSet.
+// Condition is a predicate on one column, used by query filters, CheckAndSet and CheckAndDelete.
 type Condition struct {
 	Column string
 	Op     CompareOp
@@ -127,6 +132,44 @@ func compareValues(a, b any) (int, bool) {
 
 	return 0, false
 }
+
+// validateCondition checks the column and operator of a condition; nil is valid.
+func validateCondition(cond *Condition) error {
+	if cond == nil {
+		return nil
+	}
+	if err := ValidateColumn(cond.Column); err != nil {
+		return err
+	}
+	return ValidateOp(cond.Op)
+}
+
+// checkCondition returns ErrConditionFailed unless cond holds on the row; nil always holds.
+func checkCondition(txn *badger.Txn, table, rowKey string, cond *Condition) error {
+	if cond == nil {
+		return nil
+	}
+
+	var cur any
+	item, err := txn.Get(encodeKey(table, rowKey, cond.Column))
+	if err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+		return err
+	}
+	exists := err == nil
+	if exists {
+		if cur, err = readValue(item); err != nil {
+			return err
+		}
+	}
+	if !cond.match(cur, exists) {
+		return ErrConditionFailed
+	}
+	return nil
+}
+
+// ============================================================================
+// Queries
+// ============================================================================
 
 // QueryRow represents a row returned by a query, containing its key and columns.
 type QueryRow struct {
@@ -490,8 +533,88 @@ func (q *QueryBuilder) projectColumns(cols Row) Row {
 }
 
 // ============================================================================
-// Wide-Column Operations (Batch, Incr, CAS)
+// Inserts, Batches and Atomic Operations
 // ============================================================================
+
+// insertTries bounds the search for an unused random row key.
+const insertTries = 16
+
+// InsertRow inserts a row under a new random key not yet used in Table,
+// returning the key. With no columns nothing is stored, as a row exists
+// only while it holds a cell.
+func (db *DB) InsertRow(table string, columns Row) (string, error) {
+	if err := ValidateTable(table); err != nil {
+		return "", err
+	}
+	if _, err := encodeRow(table, "", columns); err != nil {
+		return "", err
+	}
+	keys, err := db.insertRows(table, []Row{columns})
+	if err != nil {
+		return "", err
+	}
+	return keys[0], nil
+}
+
+// BatchInsert atomically inserts rows, each under a new random key not yet
+// used in Table, and returns the keys in the order of rows.
+// Empty rows get a key but store nothing.
+func (db *DB) BatchInsert(table string, rows []Row) ([]string, error) {
+	if err := ValidateTable(table); err != nil {
+		return nil, err
+	}
+	for i, cols := range rows {
+		if _, err := encodeRow(table, "", cols); err != nil {
+			return nil, fmt.Errorf("row %d: %w", i, err)
+		}
+	}
+	return db.insertRows(table, rows)
+}
+
+// insertRows stores validated rows under fresh keys in one transaction.
+func (db *DB) insertRows(table string, rows []Row) ([]string, error) {
+	var keys []string
+	err := db.bdb.Update(func(txn *badger.Txn) error {
+		keys = make([]string, 0, len(rows))
+		taken := make(map[string]bool, len(rows))
+		for _, cols := range rows {
+			rk, err := unusedRowKey(txn, table, taken)
+			if err != nil {
+				return err
+			}
+			taken[rk] = true
+			keys = append(keys, rk)
+
+			entries, err := encodeRow(table, rk, cols)
+			if err != nil {
+				return err
+			}
+			if err := writeEntries(txn, entries); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+// unusedRowKey generates a random row key that holds no cells in table
+// and is not in taken; taken covers keys of empty rows, which store nothing.
+func unusedRowKey(txn *badger.Txn, table string, taken map[string]bool) (string, error) {
+	for i := 0; i < insertTries; i++ {
+		rk, err := GenerateRowKey()
+		if err != nil {
+			return "", err
+		}
+		if !taken[rk] && !prefixUsed(txn, encodeRowPrefix(table, rk)) {
+			return rk, nil
+		}
+	}
+	return "", ErrKeysExhausted
+}
 
 // BatchMutation represents a row mutation in a BatchWrite operation.
 type BatchMutation struct {
@@ -753,38 +876,4 @@ func (db *DB) CheckAndDelete(table, rowKey string, cond *Condition, delCols []st
 		}
 		return nil
 	})
-}
-
-// validateCondition checks the column and operator of a condition; nil is valid.
-func validateCondition(cond *Condition) error {
-	if cond == nil {
-		return nil
-	}
-	if err := ValidateColumn(cond.Column); err != nil {
-		return err
-	}
-	return ValidateOp(cond.Op)
-}
-
-// checkCondition returns ErrConditionFailed unless cond holds on the row; nil always holds.
-func checkCondition(txn *badger.Txn, table, rowKey string, cond *Condition) error {
-	if cond == nil {
-		return nil
-	}
-
-	var cur any
-	item, err := txn.Get(encodeKey(table, rowKey, cond.Column))
-	if err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
-		return err
-	}
-	exists := err == nil
-	if exists {
-		if cur, err = readValue(item); err != nil {
-			return err
-		}
-	}
-	if !cond.match(cur, exists) {
-		return ErrConditionFailed
-	}
-	return nil
 }

@@ -29,7 +29,6 @@ var (
 	ErrRowNotFound    = errors.New("row not found")
 	ErrColumnNotFound = errors.New("column not found")
 	ErrCorruptData    = errors.New("corrupted binary data encountered in storage")
-	ErrKeysExhausted  = errors.New("could not generate an unused row key")
 )
 
 // Key separator byte (0x00) used to form composite keys safely because
@@ -271,6 +270,10 @@ func readValue(item *badger.Item) (any, error) {
 	return val, err
 }
 
+// ============================================================================
+// Transaction Helpers
+// ============================================================================
+
 // readRow decodes every column stored under prefix, returning nil if there are none.
 func readRow(txn *badger.Txn, prefix []byte) (Row, error) {
 	opts := badger.DefaultIteratorOptions
@@ -331,126 +334,6 @@ func deleteRow(txn *badger.Txn, prefix []byte) error {
 	return nil
 }
 
-// ============================================================================
-// Core Wide-Column Operations (CRUD & Scans)
-// ============================================================================
-
-// SetCell writes a single scalar value at (Table -> RowKey -> Column).
-func (db *DB) SetCell(table, rowKey, column string, value any) error {
-	key, err := cellKey(table, rowKey, column)
-	if err != nil {
-		return err
-	}
-	enc, err := encodeValue(value)
-	if err != nil {
-		return err
-	}
-	return db.bdb.Update(func(txn *badger.Txn) error {
-		return txn.Set(key, enc)
-	})
-}
-
-// insertTries bounds the search for an unused random row key.
-const insertTries = 16
-
-// InsertRow inserts a row under a new random key not yet used in Table,
-// returning the key. With no columns nothing is stored, as a row exists
-// only while it holds a cell.
-func (db *DB) InsertRow(table string, columns Row) (string, error) {
-	if err := ValidateTable(table); err != nil {
-		return "", err
-	}
-	if _, err := encodeRow(table, "", columns); err != nil {
-		return "", err
-	}
-	keys, err := db.insertRows(table, []Row{columns})
-	if err != nil {
-		return "", err
-	}
-	return keys[0], nil
-}
-
-// BatchInsert atomically inserts rows, each under a new random key not yet
-// used in Table, and returns the keys in the order of rows.
-// Empty rows get a key but store nothing.
-func (db *DB) BatchInsert(table string, rows []Row) ([]string, error) {
-	if err := ValidateTable(table); err != nil {
-		return nil, err
-	}
-	for i, cols := range rows {
-		if _, err := encodeRow(table, "", cols); err != nil {
-			return nil, fmt.Errorf("row %d: %w", i, err)
-		}
-	}
-	return db.insertRows(table, rows)
-}
-
-// insertRows stores validated rows under fresh keys in one transaction.
-func (db *DB) insertRows(table string, rows []Row) ([]string, error) {
-	var keys []string
-	err := db.bdb.Update(func(txn *badger.Txn) error {
-		keys = make([]string, 0, len(rows))
-		taken := make(map[string]bool, len(rows))
-		for _, cols := range rows {
-			rk, err := unusedRowKey(txn, table, taken)
-			if err != nil {
-				return err
-			}
-			taken[rk] = true
-			keys = append(keys, rk)
-
-			entries, err := encodeRow(table, rk, cols)
-			if err != nil {
-				return err
-			}
-			if err := writeEntries(txn, entries); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return keys, nil
-}
-
-// unusedRowKey generates a random row key that holds no cells in table
-// and is not in taken; taken covers keys of empty rows, which store nothing.
-func unusedRowKey(txn *badger.Txn, table string, taken map[string]bool) (string, error) {
-	for i := 0; i < insertTries; i++ {
-		rk, err := GenerateRowKey()
-		if err != nil {
-			return "", err
-		}
-		if !taken[rk] && !prefixUsed(txn, encodeRowPrefix(table, rk)) {
-			return rk, nil
-		}
-	}
-	return "", ErrKeysExhausted
-}
-
-// SetRow atomically inserts or updates multiple columns for a given (Table -> RowKey).
-func (db *DB) SetRow(table, rowKey string, columns Row) error {
-	if err := ValidateTable(table); err != nil {
-		return err
-	}
-	if err := ValidateRowKey(rowKey); err != nil {
-		return err
-	}
-	if len(columns) == 0 {
-		return nil
-	}
-
-	entries, err := encodeRow(table, strings.ToLower(rowKey), columns)
-	if err != nil {
-		return err
-	}
-	return db.bdb.Update(func(txn *badger.Txn) error {
-		return writeEntries(txn, entries)
-	})
-}
-
 // kvPair is an encoded cell ready to be written.
 type kvPair struct {
 	key []byte
@@ -483,6 +366,46 @@ func writeEntries(txn *badger.Txn, entries []kvPair) error {
 		}
 	}
 	return nil
+}
+
+// ============================================================================
+// Cell, Row and Table Operations
+// ============================================================================
+
+// SetCell writes a single scalar value at (Table -> RowKey -> Column).
+func (db *DB) SetCell(table, rowKey, column string, value any) error {
+	key, err := cellKey(table, rowKey, column)
+	if err != nil {
+		return err
+	}
+	enc, err := encodeValue(value)
+	if err != nil {
+		return err
+	}
+	return db.bdb.Update(func(txn *badger.Txn) error {
+		return txn.Set(key, enc)
+	})
+}
+
+// SetRow atomically inserts or updates multiple columns for a given (Table -> RowKey).
+func (db *DB) SetRow(table, rowKey string, columns Row) error {
+	if err := ValidateTable(table); err != nil {
+		return err
+	}
+	if err := ValidateRowKey(rowKey); err != nil {
+		return err
+	}
+	if len(columns) == 0 {
+		return nil
+	}
+
+	entries, err := encodeRow(table, strings.ToLower(rowKey), columns)
+	if err != nil {
+		return err
+	}
+	return db.bdb.Update(func(txn *badger.Txn) error {
+		return writeEntries(txn, entries)
+	})
 }
 
 // GetCell retrieves a single scalar value at (Table -> RowKey -> Column).
@@ -594,7 +517,13 @@ func (db *DB) DeleteCell(table, rowKey, column string) error {
 
 // DeleteRow atomically removes all columns associated with (Table -> RowKey).
 func (db *DB) DeleteRow(table, rowKey string) error {
-	return db.BatchDeleteRows(table, []string{rowKey})
+	prefix, err := rowPrefix(table, rowKey)
+	if err != nil {
+		return err
+	}
+	return db.bdb.Update(func(txn *badger.Txn) error {
+		return deleteRow(txn, prefix)
+	})
 }
 
 // ListTables returns the names of all tables in the database, in sorted order.
