@@ -133,6 +133,10 @@ func TestQuery(t *testing.T) {
 		{s.Query("u").Where("age", Ne, 30.0), "[eu-2 eu-3 us-1]"},
 		{s.Query("u").Where("age", Eq, "30"), "[]"},
 		{s.Query("u").Prefix("zz"), "[]"},
+		{s.Query("u").Where("name", Contains, "a"), "[eu-1 us-1]"},
+		{s.Query("u").Where("name", Contains, "A"), "[]"},
+		{s.Query("u").Where("age", Contains, "3"), "[]"},
+		{s.Query("u").Where("name", Contains, "o").Select("age"), "[eu-2]"},
 	}
 	for i, c := range cases {
 		rs, err := c.q.Run()
@@ -245,6 +249,38 @@ func TestAgg(t *testing.T) {
 	rs, _ := s.Query("u").Where("age", Missing, nil).Run()
 	if len(rs) != 1 || rs[0].Key != "d" {
 		t.Fatal(rs)
+	}
+}
+
+func TestIfContains(t *testing.T) {
+	s := open(t)
+	s.UpsertValue("a", "x", "tags", "red,green")
+	if err := s.Batch().If("a", "x", "tags", Contains, "green").Set("a", "x", "ok", true).Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Batch().If("a", "x", "tags", Contains, "blue").Commit(); !errors.Is(err, ErrCondition) {
+		t.Fatal(err)
+	}
+	if err := s.Batch().If("a", "x", "tags", Contains, 1.0).Commit(); !errors.Is(err, ErrType) {
+		t.Fatal(err)
+	}
+}
+
+func BenchmarkContains(b *testing.B) {
+	s := open(b)
+	tab := Table{}
+	for i := range 20000 {
+		tab[fmt.Sprintf("r%05d", i)] = Row{"name": fmt.Sprintf("user-%05d-somewhat-long-name", i)}
+	}
+	if err := s.UpsertTable("t", tab); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		n, err := s.Query("t").Where("name", Contains, "00042").Count()
+		if err != nil || n != 1 {
+			b.Fatal(n, err)
+		}
 	}
 }
 

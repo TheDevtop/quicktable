@@ -1,5 +1,10 @@
 package mustang
 
+/*
+	The Mustang wide-column engine,
+	optimized for read and query performance.
+*/
+
 import (
 	"bytes"
 

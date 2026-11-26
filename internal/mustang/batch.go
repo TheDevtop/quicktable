@@ -1,6 +1,9 @@
 package mustang
 
 /*
+	The Mustang wide-column engine,
+	optimized for read and query performance.
+
 	Batches apply writes atomically in one Badger transaction, in the
 	order they were added. Large batches fail with badger.ErrTxnTooBig.
 	All writes in Mustang go through a batch.

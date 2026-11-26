@@ -1,5 +1,10 @@
 package mustang
 
+/*
+	The Mustang wide-column engine,
+	optimized for read and query performance.
+*/
+
 import (
 	"bytes"
 	"errors"
@@ -19,16 +24,25 @@ const (
 	Le
 	Gt
 	Ge
-	Prefix  // string value starts with val
-	Exists  // cell is present; val is ignored
-	Missing // cell is absent; val is ignored
+	Prefix   // string value starts with val
+	Exists   // cell is present; val is ignored
+	Missing  // cell is absent; val is ignored
+	Contains // string value contains val
 )
 
+// textual ops apply to string values only.
+func (o Op) textual() bool {
+	return o == Prefix || o == Contains
+}
+
 // cond is a test on one column, shared by queries and batches.
+// For textual ops, sub holds val as bytes so raw cells can be
+// tested without decoding.
 type cond struct {
 	col string
 	op  Op
 	val Value
+	sub []byte
 }
 
 func newCond(col string, op Op, val Value) (cond, error) {
@@ -36,18 +50,22 @@ func newCond(col string, op Op, val Value) (cond, error) {
 		return cond{}, err
 	}
 	switch {
-	case op < Eq || op > Missing:
+	case op < Eq || op > Contains:
 		return cond{}, fmt.Errorf("mustang: unknown op %d", op)
 	case op == Exists || op == Missing:
-		return cond{col, op, nil}, nil
+		return cond{col: col, op: op}, nil
 	}
-	if _, ok := val.(string); op == Prefix && !ok {
-		return cond{}, fmt.Errorf("%w: prefix needs a string", ErrType)
+	if _, ok := val.(string); op.textual() && !ok {
+		return cond{}, fmt.Errorf("%w: prefix and contains need a string", ErrType)
 	}
 	if _, err := encode(val); err != nil {
 		return cond{}, err
 	}
-	return cond{col, op, val}, nil
+	c := cond{col: col, op: op, val: val}
+	if op.textual() {
+		c.sub = []byte(val.(string))
+	}
+	return c, nil
 }
 
 // holds reports whether the condition is met by a cell that is
@@ -59,9 +77,9 @@ func (c cond) holds(v Value, present bool) bool {
 	if c.op == Exists {
 		return true
 	}
-	if c.op == Prefix {
+	if c.op.textual() {
 		s, ok := v.(string)
-		return ok && strings.HasPrefix(s, c.val.(string))
+		return ok && c.text([]byte(s))
 	}
 	n, ok := compare(v, c.val)
 	if !ok {
@@ -80,6 +98,23 @@ func (c cond) holds(v Value, present bool) bool {
 		return n > 0
 	}
 	return n >= 0 // Ge
+}
+
+// text tests a string payload against a textual condition.
+func (c cond) text(b []byte) bool {
+	if c.op == Prefix {
+		return bytes.HasPrefix(b, c.sub)
+	}
+	return bytes.Contains(b, c.sub)
+}
+
+// raw rejects an encoded cell early when a textual condition on it
+// fails, so non-matching strings are never decoded.
+func (c cond) raw(b []byte) bool {
+	if !c.op.textual() {
+		return true
+	}
+	return len(b) > 0 && b[0] == tagString && c.text(b[1:])
 }
 
 // compare orders a and b; ok is false when they differ in type.
@@ -327,6 +362,10 @@ func (q *Query) fold(col string, fn func(Value) error) error {
 	})
 }
 
+// seekAfter is how many keys a scan steps over before it seeks
+// past the rest of a row instead.
+const seekAfter = 8
+
 // errStop ends a scan early without failing it.
 var errStop = errors.New("stop")
 
@@ -351,13 +390,14 @@ func (q *Query) scan(need map[string]bool, fn func(k []byte, row Row) error) err
 
 		var (
 			cur  []byte // rowKey being read
-			row  Row    // nil once the row has failed a condition
+			row  Row    // needed values; allocated on first store
+			dead bool   // row has failed a condition
 			got  int    // needed columns seen in row
 			skip []byte // reused seek key
 		)
 		// flush hands a finished row to fn when it passes.
 		flush := func() error {
-			if row == nil || !q.complete(row) {
+			if cur == nil || dead || !q.complete(row) {
 				return nil
 			}
 			if err := fn(cur, row); err != nil {
@@ -369,9 +409,17 @@ func (q *Query) scan(need map[string]bool, fn func(k []byte, row Row) error) err
 			}
 			return nil
 		}
-		// next seeks past the rest of row r; its keys end before sep+1.
+		// next moves past the rest of the current row. A Seek costs far
+		// more than a step, so narrow rows are stepped over and only
+		// wide rows are sought past; a row's keys end before sep+1.
 		next := func(r []byte) {
 			skip = append(append(append(skip[:0], tab...), r...), sep+1)
+			for range seekAfter {
+				it.Next()
+				if !it.Valid() || bytes.Compare(it.Item().Key(), skip) >= 0 {
+					return
+				}
+			}
 			it.Seek(skip)
 		}
 
@@ -386,19 +434,22 @@ func (q *Query) scan(need map[string]bool, fn func(k []byte, row Row) error) err
 					return err
 				}
 				cur = append(cur[:0], r...)
-				row, got = Row{}, 0
+				row, got, dead = nil, 0, false
 			}
 
 			c := field(k, lvlCol)
 			if need == nil || need[string(c)] {
-				v, err := value(it.Item())
+				v, ok, err := q.read(it.Item(), c)
 				if err != nil {
 					return err
 				}
-				if !q.test(c, v) {
-					row = nil
+				if !ok {
+					dead = true
 					next(r)
 					continue
+				}
+				if row == nil {
+					row = Row{}
 				}
 				row[string(c)] = v
 				got++
@@ -418,14 +469,32 @@ func (q *Query) scan(need map[string]bool, fn func(k []byte, row Row) error) err
 	return err
 }
 
-// test checks every condition on column c against its present value v.
-func (q *Query) test(c []byte, v Value) bool {
-	for _, cd := range q.conds {
-		if cd.col == string(c) && !cd.holds(v, true) {
-			return false
+// read decodes cell item of column c and tests the conditions on it.
+// Textual conditions run on the raw bytes first, so a failing string
+// is rejected without being decoded.
+func (q *Query) read(item *badger.Item, c []byte) (Value, bool, error) {
+	var v Value
+	ok := true
+	err := item.Value(func(b []byte) error {
+		for _, cd := range q.conds {
+			if cd.col == string(c) && !cd.raw(b) {
+				ok = false
+				return nil
+			}
 		}
-	}
-	return true
+		var err error
+		if v, err = decode(b); err != nil {
+			return err
+		}
+		for _, cd := range q.conds {
+			if cd.col == string(c) && !cd.op.textual() && !cd.holds(v, true) {
+				ok = false
+				return nil
+			}
+		}
+		return nil
+	})
+	return v, ok, err
 }
 
 // complete checks conditions on the row as a whole; present values
