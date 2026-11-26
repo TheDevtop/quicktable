@@ -13,15 +13,17 @@ import (
 
 // Client talks to a Quicktable REST API server.
 type Client struct {
-	base string // e.g. "http://localhost:16000"
-	http *http.Client
+	base  string // e.g. "http://localhost:16000"
+	token string // sent as a bearer token on every request
+	http  *http.Client
 }
 
-// New creates a client pointing at the given base URL.
-func New(base string) *Client {
+// New creates a client pointing at the given base URL that authenticates with token.
+func New(base, token string) *Client {
 	return &Client{
-		base: base,
-		http: http.DefaultClient,
+		base:  base,
+		token: token,
+		http:  http.DefaultClient,
 	}
 }
 
@@ -175,7 +177,7 @@ func (c *Client) GetCells(table, rowKey string, columns []string) (Row, error) {
 
 // RowExists reports whether a row holds any cell.
 func (c *Client) RowExists(table, rowKey string) (bool, error) {
-	resp, err := c.http.Head(c.base + apiPath(table, "rows", rowKey))
+	resp, err := c.send(http.MethodHead, apiPath(table, "rows", rowKey), nil)
 	if err != nil {
 		return false, err
 	}
@@ -367,8 +369,21 @@ func (e *apiError) Error() string {
 	return fmt.Sprintf("quicktable: %d %s", e.Status, e.Msg)
 }
 
+// send performs one authenticated request; a non-nil body is sent as JSON.
+func (c *Client) send(method, path string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest(method, c.base+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return c.http.Do(req)
+}
+
 func (c *Client) get(path string, dst any) error {
-	resp, err := c.http.Get(c.base + path)
+	resp, err := c.send(http.MethodGet, path, nil)
 	if err != nil {
 		return err
 	}
@@ -377,11 +392,7 @@ func (c *Client) get(path string, dst any) error {
 }
 
 func (c *Client) del(path string, dst any) error {
-	req, err := http.NewRequest(http.MethodDelete, c.base+path, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := c.http.Do(req)
+	resp, err := c.send(http.MethodDelete, path, nil)
 	if err != nil {
 		return err
 	}
@@ -406,14 +417,7 @@ func (c *Client) doJSON(method, path string, body any, dst any) error {
 		}
 		r = bytes.NewReader(buf)
 	}
-	req, err := http.NewRequest(method, c.base+path, r)
-	if err != nil {
-		return err
-	}
-	if r != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.http.Do(req)
+	resp, err := c.send(method, path, r)
 	if err != nil {
 		return err
 	}

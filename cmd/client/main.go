@@ -10,7 +10,10 @@ import (
 	"github.com/TheDevtop/quicktable/pkg/client"
 )
 
-var addr = flag.String("addr", "http://localhost:16000", "Quicktable server address")
+var (
+	addr  = flag.String("addr", "http://localhost:16000", "Quicktable server address")
+	token = flag.String("token", "", "Bearer token for the server")
+)
 
 func main() {
 	flag.Parse()
@@ -19,7 +22,7 @@ func main() {
 		usage()
 	}
 
-	c := client.New(*addr)
+	c := client.New(*addr, *token)
 	var err error
 
 	switch args[0] {
@@ -85,7 +88,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `usage: qt [-addr url] <command> [args...]
+	fmt.Fprintf(os.Stderr, `usage: qt [-addr url] [-token token] <command> [args...]
 
 commands:
   health
@@ -435,5 +438,9 @@ func init() {
 	// Accept -addr from QUICKTABLE_ADDR env as a default.
 	if v := os.Getenv("QUICKTABLE_ADDR"); v != "" {
 		flag.Set("addr", strings.TrimSpace(v))
+	}
+	// Prefer QUICKTABLE_TOKEN: unlike a flag, it does not show in the process list.
+	if v := os.Getenv("QUICKTABLE_TOKEN"); v != "" {
+		flag.Set("token", strings.TrimSpace(v))
 	}
 }
