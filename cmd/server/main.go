@@ -37,6 +37,7 @@ func run() error {
 	dataDir := flag.String("d", "./data", "Storage directory")
 	inMemory := flag.Bool("m", false, "Run database completely in-memory")
 	debug := flag.Bool("v", false, "Enable debug level logging")
+	token := flag.String("t", "", "Bearer token")
 	flag.Parse()
 
 	// 1. Setup one logger for the server and Badger
@@ -47,6 +48,10 @@ func run() error {
 	logger.SetLevel(log.InfoLevel)
 	if *debug {
 		logger.SetLevel(log.DebugLevel)
+	}
+
+	if *token == "" {
+		logger.Warn("bearer token not set, this is insecure")
 	}
 
 	logger.Info("starting quicktable server", "addr", *addr, "inMemory", *inMemory, "dir", *dataDir)
@@ -76,7 +81,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:         *addr,
-		Handler:      mux,
+		Handler:      requireToken(*token, mux),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,

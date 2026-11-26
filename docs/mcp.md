@@ -11,15 +11,25 @@ The server uses the **SSE + HTTP POST** transport pattern:
 | `/mcp/sse` | GET | Open a persistent SSE stream; receive the message endpoint URL |
 | `/mcp/message?sessionId=<id>` | POST | Send JSON-RPC tool calls; answered `202 Accepted` with no body, responses are delivered over SSE |
 
+### Authentication
+
+Both endpoints require the server's token (set with the server's `-t` flag) as a bearer token on every request, the SSE stream included:
+
+```
+Authorization: Bearer <token>
+```
+
+Without a valid token the server answers **401 Unauthorized** with `{"error":"missing or invalid bearer token"}`, and no session is created. The session ID in the endpoint URL is not a credential: every message POST must carry the token as well.
+
 ### Session handshake
 
-1. Open a long-lived `GET /mcp/sse` connection (keep-alive).
+1. Open a long-lived `GET /mcp/sse` connection (keep-alive), sending the `Authorization` header.
 2. The server immediately sends an SSE event:
    ```
    event: endpoint
    data: /mcp/message?sessionId=<uuid>
    ```
-3. Send all subsequent JSON-RPC requests to that URL.
+3. Send all subsequent JSON-RPC requests to that URL, each with the `Authorization` header.
 4. Responses arrive as SSE events on the stream:
    ```
    event: message

@@ -2,6 +2,14 @@
 
 All endpoints except [`/health`](#health) are under `/api/tables`. Every response body is JSON with `Content-Type: application/json`, except for [`HEAD`](#check-a-row-exists), which has no body.
 
+**Authentication:** every request except [`GET /health`](#health) must carry the server's token (set with the server's `-t` flag) as a bearer token:
+
+```
+Authorization: Bearer <token>
+```
+
+A request with a missing, malformed or wrong token is rejected with **401 Unauthorized** and a `WWW-Authenticate: Bearer` header, before anything else is checked. The error never repeats the token that was sent.
+
 **Row keys** are 8-character hexadecimal strings (e.g. `"a3f10c2b"`). Either case is accepted; keys are stored and listed in lowercase. The engine auto-generates one when you insert a row.
 
 **Cell values** must be a JSON number, string or boolean. Numbers are stored as 64-bit floats, so integers above 2^53 lose precision. `null`, arrays and objects are rejected.
@@ -19,6 +27,7 @@ All errors return a JSON body with a single `"error"` key.
 | HTTP status | Cause |
 |-------------|-------|
 | 400 Bad Request | Invalid table name, row key, column name or operator, unsupported value type, wrong cell type for `incr`/`append`/`prepend`, conflicting query fields, or malformed JSON |
+| 401 Unauthorized | Missing or invalid bearer token: `{ "error": "missing or invalid bearer token" }` |
 | 404 Not Found | Row or column does not exist |
 | 409 Conflict | A `cas` or `cad` condition check failed |
 | 500 Internal Server Error | Unexpected storage error |
@@ -31,7 +40,7 @@ All errors return a JSON body with a single `"error"` key.
 GET /health
 ```
 
-Returns `200` whenever the server is accepting requests. Use it for liveness and readiness probes.
+Returns `200` whenever the server is accepting requests. Use it for liveness and readiness probes. This is the only endpoint that needs no token.
 
 **Response 200**
 
