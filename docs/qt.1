@@ -48,6 +48,12 @@ Delete
 .I table
 and all its rows.
 Dropping a table that does not exist is not an error.
+.TP
+.BI list-columns " table"
+Print the name of every column used by any row of
+.IR table ,
+one per line, sorted.
+This scans every key of the table.
 .SS Cells
 .TP
 .BI get-cell " table rowkey column"
@@ -76,6 +82,19 @@ Listing a table that does not exist prints nothing.
 .TP
 .BI get-row " table rowkey"
 Print all columns of a row as a JSON object.
+.TP
+.BI get-cells " table rowkey column \fR...\fP"
+Print the named columns of a row as a JSON object.
+Columns the row does not have are left out;
+a row that does not exist prints
+.BR {} .
+.TP
+.BI row-exists " table rowkey"
+Print
+.B true
+if the row holds any cell,
+.B false
+otherwise.
 .TP
 .BI set-row " table rowkey json-columns"
 Merge the columns of the JSON object
@@ -136,7 +155,14 @@ maximum number of rows to return.
 .TP
 .B where
 array of predicates
-.BR "{\(dqcolumn\(dq: \fIname\fP, \(dqop\(dq: \fIop\fP, \(dqvalue\(dq: \fIv\fP}" .
+.BR "{\(dqcolumn\(dq: \fIname\fP, \(dqop\(dq: \fIop\fP, \(dqvalue\(dq: \fIv\fP}" ,
+all of which must hold.
+.TP
+.B or
+array of predicate arrays;
+a row matches if all predicates of any array hold.
+Cannot be combined with
+.BR where .
 .TP
 .B countOnly
 boolean; return only
@@ -146,7 +172,51 @@ With
 only
 .B count
 is printed.
+.TP
+.B aggregate
+column name; print only an object with the
+.BR count ,
+.BR sum ,
+.BR min ,
+.B max
+and
+.B avg
+of the numeric values of that column in matching rows.
+Rows where it is missing or not a number are skipped,
+and
+.B offset
+and
+.B limit
+are ignored.
+Cannot be combined with
+.BR countOnly .
 .RE
+.TP
+.BI del-query " table json-filter"
+Delete every row of
+.I table
+matching
+.I json-filter
+in one transaction and print how many were deleted.
+.I Json-filter
+takes the fields of
+.I json-query
+except
+.BR select ,
+.B countOnly
+and
+.BR aggregate ;
+.B offset
+and
+.B limit
+apply as in
+.BR query .
+Unknown keys are rejected,
+so a misspelled
+.B where
+never deletes every row;
+.B {}
+deletes every row.
 .SS Batches
 .TP
 .BI batch-get " table key \fR...\fP"
@@ -211,6 +281,27 @@ unknown keys are rejected,
 so a misspelled
 .B condition
 never becomes an unconditional write.
+.TP
+.BI cad " table rowkey json-body"
+Check and delete.
+.I Json-body
+is
+.BR "{\(dqcondition\(dq: \fIcond\fP, \(dqdelCols\(dq: \fIcolumns\fP}" ,
+with
+.I cond
+as in
+.BR cas .
+If the condition holds, the columns named in the array
+.I columns
+are deleted atomically,
+or the whole row if
+.B delCols
+is absent.
+Without a condition the delete is unconditional.
+Unknown keys are rejected,
+so a misspelled
+.B delCols
+never deletes the whole row.
 .SH ENVIRONMENT
 .TP
 .B QUICKTABLE_ADDR
@@ -242,6 +333,21 @@ qt cas users a3f10c2b '{"condition": {"column": "name", "op": "=",
 	"value": "ann"}, "setCols": {"name": "anna"}}'
 .EE
 .PP
+Average age of users that are active or have no status:
+.IP
+.EX
+qt query users '{"aggregate": "age", "or": [
+	[{"column": "active", "op": "=", "value": true}],
+	[{"column": "status", "op": "MISSING"}]]}'
+.EE
+.PP
+Delete inactive users, at most 1000 at a time:
+.IP
+.EX
+qt del-query users '{"limit": 1000,
+	"where": [{"column": "active", "op": "=", "value": false}]}'
+.EE
+.PP
 Talk to another server:
 .IP
 .EX
@@ -255,9 +361,12 @@ QUICKTABLE_ADDR=http://db:16000 qt list-tables
 .IR quicktable (1),
 .I docs/rest.md
 for the REST API and the operators accepted in
-.B where
+.BR where ,
+.B or
 and
 .B cas
+and
+.B cad
 conditions.
 .SH DIAGNOSTICS
 Exit status is 0 on success,

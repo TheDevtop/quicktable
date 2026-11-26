@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -41,23 +42,37 @@ type Predicate struct {
 }
 
 // QueryRequest holds all optional query parameters.
+// Where and Or cannot be combined, nor CountOnly and Aggregate.
 type QueryRequest struct {
-	Prefix    string      `json:"prefix,omitempty"`
-	StartKey  string      `json:"startKey,omitempty"`
-	EndKey    string      `json:"endKey,omitempty"`
-	Select    []string    `json:"select,omitempty"`
-	OrderDesc bool        `json:"orderDesc,omitempty"`
-	Offset    int         `json:"offset,omitempty"`
-	Limit     int         `json:"limit,omitempty"`
-	Where     []Predicate `json:"where,omitempty"`
-	CountOnly bool        `json:"countOnly,omitempty"`
+	Prefix    string        `json:"prefix,omitempty"`
+	StartKey  string        `json:"startKey,omitempty"`
+	EndKey    string        `json:"endKey,omitempty"`
+	Select    []string      `json:"select,omitempty"`
+	OrderDesc bool          `json:"orderDesc,omitempty"`
+	Offset    int           `json:"offset,omitempty"`
+	Limit     int           `json:"limit,omitempty"`
+	Where     []Predicate   `json:"where,omitempty"`
+	Or        [][]Predicate `json:"or,omitempty"` // a row matches if all predicates of any group hold
+	CountOnly bool          `json:"countOnly,omitempty"`
+	Aggregate string        `json:"aggregate,omitempty"` // numeric column to summarize in Stats
 }
 
 // QueryResult holds the response from a query.
+// With Aggregate set only Stats is filled.
 type QueryResult struct {
 	Table string     `json:"table"`
 	Rows  []QueryRow `json:"rows"`
 	Count int        `json:"count"`
+	Stats *Stats     `json:"stats,omitempty"`
+}
+
+// Stats summarizes the numeric values of a column over the rows of a query.
+type Stats struct {
+	Count int     `json:"count"`
+	Sum   float64 `json:"sum"`
+	Min   float64 `json:"min"`
+	Max   float64 `json:"max"`
+	Avg   float64 `json:"avg"`
 }
 
 // Mutation describes a single row mutation in a batch write.
@@ -106,6 +121,15 @@ func (c *Client) ListRows(table string) ([]string, error) {
 	return resp.Rows, err
 }
 
+// ListColumns returns the distinct column names used in a table, sorted.
+func (c *Client) ListColumns(table string) ([]string, error) {
+	var resp struct {
+		Columns []string `json:"columns"`
+	}
+	err := c.get(apiPath(table, "columns"), &resp)
+	return resp.Columns, err
+}
+
 // --- Cell operations ---
 
 // GetCell retrieves a single cell value.
@@ -139,6 +163,33 @@ func (c *Client) GetRow(table, rowKey string) (Row, error) {
 	return resp.Columns, err
 }
 
+// GetCells retrieves the given columns of a row. Missing columns are omitted.
+func (c *Client) GetCells(table, rowKey string, columns []string) (Row, error) {
+	q := url.Values{"column": columns}
+	var resp struct {
+		Columns Row `json:"columns"`
+	}
+	err := c.get(apiPath(table, "rows", rowKey)+"?"+q.Encode(), &resp)
+	return resp.Columns, err
+}
+
+// RowExists reports whether a row holds any cell.
+func (c *Client) RowExists(table, rowKey string) (bool, error) {
+	resp, err := c.http.Head(c.base + apiPath(table, "rows", rowKey))
+	if err != nil {
+		return false, err
+	}
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	}
+	// A HEAD response has no body to carry an error message.
+	return false, &apiError{Status: resp.StatusCode, Msg: http.StatusText(resp.StatusCode)}
+}
+
 // SetRow merges columns into a row.
 func (c *Client) SetRow(table, rowKey string, cols Row) error {
 	return c.putJSON(apiPath(table, "rows", rowKey), cols, nil)
@@ -169,6 +220,20 @@ func (c *Client) Query(table string, q *QueryRequest) (*QueryResult, error) {
 	var resp QueryResult
 	err := c.postJSON(apiPath(table, "query"), body, &resp)
 	return &resp, err
+}
+
+// DeleteQuery atomically deletes every row matching q and returns how many were deleted.
+// Only the filter fields of q may be set. A nil q is refused;
+// pass an empty QueryRequest to delete every row.
+func (c *Client) DeleteQuery(table string, q *QueryRequest) (int, error) {
+	if q == nil {
+		return 0, errors.New("quicktable: delete by query needs a filter")
+	}
+	var resp struct {
+		Deleted int `json:"deleted"`
+	}
+	err := c.postJSON(apiPath(table, "query", "delete"), q, &resp)
+	return resp.Deleted, err
 }
 
 // --- Batch ---
@@ -268,6 +333,19 @@ func (c *Client) CAS(table, rowKey string, cond *CASCondition, setCols Row) erro
 	return c.postJSON(apiPath(table, "rows", rowKey, "cas"), body, nil)
 }
 
+// CAD performs an atomic check-and-delete on a row: if cond holds,
+// delCols are deleted, or the whole row if delCols is empty.
+func (c *Client) CAD(table, rowKey string, cond *CASCondition, delCols []string) error {
+	body := map[string]any{}
+	if cond != nil {
+		body["condition"] = cond
+	}
+	if len(delCols) > 0 {
+		body["delCols"] = delCols
+	}
+	return c.postJSON(apiPath(table, "rows", rowKey, "cad"), body, nil)
+}
+
 // --- HTTP helpers ---
 
 // apiPath joins escaped segments under /api/tables, so names may contain / or ?.
@@ -351,7 +429,7 @@ func decodeResp(resp *http.Response, dst any) error {
 		_ = json.NewDecoder(resp.Body).Decode(&errBody)
 		msg := errBody.Error
 		if msg == "" {
-			msg = resp.Status
+			msg = http.StatusText(resp.StatusCode)
 		}
 		return &apiError{Status: resp.StatusCode, Msg: msg}
 	}

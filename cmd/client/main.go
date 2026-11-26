@@ -29,6 +29,8 @@ func main() {
 		err = cmdListTables(c, args[1:])
 	case "drop-table":
 		err = cmdDropTable(c, args[1:])
+	case "list-columns":
+		err = cmdListColumns(c, args[1:])
 	case "get-cell":
 		err = cmdGetCell(c, args[1:])
 	case "set-cell":
@@ -39,6 +41,10 @@ func main() {
 		err = cmdListRows(c, args[1:])
 	case "get-row":
 		err = cmdGetRow(c, args[1:])
+	case "get-cells":
+		err = cmdGetCells(c, args[1:])
+	case "row-exists":
+		err = cmdRowExists(c, args[1:])
 	case "set-row":
 		err = cmdSetRow(c, args[1:])
 	case "insert-row":
@@ -47,6 +53,8 @@ func main() {
 		err = cmdDelRow(c, args[1:])
 	case "query":
 		err = cmdQuery(c, args[1:])
+	case "del-query":
+		err = cmdDelQuery(c, args[1:])
 	case "batch-get":
 		err = cmdBatchGet(c, args[1:])
 	case "batch-write":
@@ -63,6 +71,8 @@ func main() {
 		err = cmdPrepend(c, args[1:])
 	case "cas":
 		err = cmdCAS(c, args[1:])
+	case "cad":
+		err = cmdCAD(c, args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
 		usage()
@@ -81,15 +91,19 @@ commands:
   health
   list-tables
   drop-table  <table>
+  list-columns <table>
   get-cell   <table> <rowKey> <column>
   set-cell    <table> <rowKey> <column> <json-value>
   del-cell    <table> <rowKey> <column>
   list-rows   <table>
   get-row     <table> <rowKey>
+  get-cells   <table> <rowKey> <column> [column...]
+  row-exists  <table> <rowKey>
   set-row     <table> <rowKey> <json-columns>
   insert-row  <table> [json-columns]
   del-row     <table> <rowKey>
   query       <table> [json-query]
+  del-query   <table> <json-filter>
   batch-get   <table> <key> [key...]
   batch-write <table> <json-mutations>
   batch-delete <table> <key> [key...]
@@ -98,6 +112,7 @@ commands:
   append      <table> <rowKey> <column> <value>
   prepend     <table> <rowKey> <column> <value>
   cas         <table> <rowKey> <json-body>
+  cad         <table> <rowKey> <json-body>
 `)
 	os.Exit(2)
 }
@@ -150,6 +165,18 @@ func cmdDropTable(c *client.Client, args []string) error {
 	return c.DropTable(args[0])
 }
 
+func cmdListColumns(c *client.Client, args []string) error {
+	needArgs(args, 1, "list-columns")
+	cols, err := c.ListColumns(args[0])
+	if err != nil {
+		return err
+	}
+	for _, col := range cols {
+		fmt.Println(col)
+	}
+	return nil
+}
+
 func cmdGetCell(c *client.Client, args []string) error {
 	needArgs(args, 3, "get-cell")
 	val, err := c.GetCell(args[0], args[1], args[2])
@@ -193,6 +220,26 @@ func cmdGetRow(c *client.Client, args []string) error {
 		return err
 	}
 	printJSON(row)
+	return nil
+}
+
+func cmdGetCells(c *client.Client, args []string) error {
+	needArgs(args, 3, "get-cells")
+	row, err := c.GetCells(args[0], args[1], args[2:])
+	if err != nil {
+		return err
+	}
+	printJSON(row)
+	return nil
+}
+
+func cmdRowExists(c *client.Client, args []string) error {
+	needArgs(args, 2, "row-exists")
+	ok, err := c.RowExists(args[0], args[1])
+	if err != nil {
+		return err
+	}
+	printJSON(ok)
 	return nil
 }
 
@@ -247,7 +294,28 @@ func cmdQuery(c *client.Client, args []string) error {
 		printJSON(map[string]int{"count": res.Count})
 		return nil
 	}
+	if q != nil && q.Aggregate != "" {
+		printJSON(res.Stats)
+		return nil
+	}
 	printJSON(res)
+	return nil
+}
+
+func cmdDelQuery(c *client.Client, args []string) error {
+	needArgs(args, 2, "del-query")
+	// Unknown keys are rejected so a misspelled "where" cannot delete every row.
+	var q client.QueryRequest
+	dec := json.NewDecoder(strings.NewReader(args[1]))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&q); err != nil {
+		return fmt.Errorf("invalid json filter: %w", err)
+	}
+	n, err := c.DeleteQuery(args[0], &q)
+	if err != nil {
+		return err
+	}
+	printJSON(n)
 	return nil
 }
 
@@ -346,6 +414,21 @@ func cmdCAS(c *client.Client, args []string) error {
 	}
 
 	return c.CAS(table, rowKey, body.Condition, body.SetCols)
+}
+
+func cmdCAD(c *client.Client, args []string) error {
+	needArgs(args, 3, "cad")
+	var body struct {
+		Condition *client.CASCondition `json:"condition,omitempty"`
+		DelCols   []string             `json:"delCols,omitempty"`
+	}
+	// Unknown keys are rejected so a misspelled "delCols" cannot delete the whole row.
+	dec := json.NewDecoder(strings.NewReader(args[2]))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		return fmt.Errorf("invalid json cad body: %w", err)
+	}
+	return c.CAD(args[0], args[1], body.Condition, body.DelCols)
 }
 
 func init() {

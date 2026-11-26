@@ -20,7 +20,7 @@ All errors return a JSON body with a single `"error"` key.
 |-------------|-------|
 | 400 Bad Request | Invalid table name, row key, column name or operator, unsupported value type, wrong cell type for `incr`/`append`/`prepend`, or malformed JSON |
 | 404 Not Found | Row or column does not exist |
-| 409 Conflict | A `cas` condition check failed |
+| 409 Conflict | A `cas` or `cad` condition check failed |
 | 500 Internal Server Error | Unexpected storage error |
 
 ---
@@ -75,6 +75,24 @@ Permanently removes the table and all of its rows. This cannot be undone.
 
 ```json
 { "status": "ok" }
+```
+
+---
+
+### List columns
+
+```
+GET /api/tables/{table}/columns
+```
+
+Returns the distinct column names used by any row of the table, sorted. This scans every key of the table, so it gets slower as the table grows.
+
+> **Note:** Listing a table that does not exist is not an error. It returns `200` with an empty list.
+
+**Response 200**
+
+```json
+{ "columns": ["active", "age", "email"] }
 ```
 
 ---
@@ -166,7 +184,15 @@ Returns the keys of all rows in the table, sorted. Use [Get a row](#get-a-row) o
 GET /api/tables/{table}/rows/{rowKey}
 ```
 
-Returns all columns of the row as a key/value map.
+Returns all columns of the row as a key/value map, or **404** if the row does not exist.
+
+To read only some columns, repeat the `column` query parameter:
+
+```
+GET /api/tables/{table}/rows/{rowKey}?column=email&column=age
+```
+
+Columns the row does not have are left out of `columns`. Unlike a full read, this returns `200` with empty `columns` when the row does not exist.
 
 **Response 200**
 
@@ -181,6 +207,22 @@ Returns all columns of the row as a key/value map.
   }
 }
 ```
+
+---
+
+### Check a row exists
+
+```
+HEAD /api/tables/{table}/rows/{rowKey}
+```
+
+Checks whether the row holds any cell, without reading its values. There is no response body.
+
+| Status | Meaning |
+|--------|---------|
+| 200 OK | The row exists |
+| 404 Not Found | The row does not exist |
+| 400 Bad Request | Invalid table name or row key |
 
 ---
 
@@ -272,8 +314,10 @@ Scan, filter, and project rows. Send an empty body or omit `Content-Length` to r
 | `orderDesc` | bool | Sort rows by key in descending order (default: ascending) |
 | `offset` | int | Skip the first N matching rows |
 | `limit` | int | Return at most N rows |
-| `where` | Predicate[] | Column filter predicates (see below) |
+| `where` | Predicate[] | Predicates that must all hold (see below) |
+| `or` | Predicate[][] | Alternative predicate groups: a row matches if all predicates of any group hold. Cannot be combined with `where`, and no group may be empty |
 | `countOnly` | bool | Return only a count instead of row data |
+| `aggregate` | string | Return statistics over this numeric column instead of row data. Cannot be combined with `countOnly` |
 
 **Predicate object**
 
@@ -322,16 +366,72 @@ Any other `op` is rejected with **400**. Numbers compare with numbers, strings w
 }
 ```
 
+**Example request** — `or`
+
+Rows that are active adults, or that have no `age` at all:
+
+```json
+{
+  "or": [
+    [
+      { "column": "age", "op": ">=", "value": 18 },
+      { "column": "active", "op": "=", "value": true }
+    ],
+    [
+      { "column": "age", "op": "MISSING" }
+    ]
+  ]
+}
+```
+
 **Response 200** — count only
 
 ```json
 { "count": 42 }
 ```
 
+**Response 200** — aggregate
+
+`count` is the number of matching rows whose column holds a number. Rows where the column is missing or is not a number are skipped. `offset` and `limit` are ignored, as with `countOnly`. When no row has a number, every field is `0`.
+
+```json
+{
+  "table": "users",
+  "column": "age",
+  "stats": { "count": 3, "sum": 90, "min": 25, "max": 35, "avg": 30 }
+}
+```
+
 Each item in `rows` has the shape:
 
 ```json
 { "rowKey": "a3f10c2b", "columns": { "col": "val" } }
+```
+
+---
+
+### Delete by query
+
+```
+POST /api/tables/{table}/query/delete
+```
+
+Deletes every row that matches the filter in one transaction: either all of them are deleted or none are. This cannot be undone.
+
+The body takes the filter fields of [Query](#query): `prefix`, `startKey`, `endKey`, `orderDesc`, `offset`, `limit`, `where` and `or`. `offset` and `limit` apply as in a query, so `limit` lets you delete in chunks. A very large delete can fail with **500** because it does not fit in one transaction; nothing is deleted then, and you can retry with a `limit`.
+
+A body is required, and unknown fields are rejected with **400**, so a misspelled `where` cannot delete every row. Send `{}` to delete every row of the table.
+
+**Example request**
+
+```json
+{ "where": [ { "column": "active", "op": "=", "value": false } ] }
+```
+
+**Response 200**
+
+```json
+{ "table": "users", "deleted": 12 }
 ```
 
 ---
@@ -568,6 +668,45 @@ Omit `condition` to write unconditionally. Unknown fields in the body are reject
 | `column` | string | Column to check |
 | `op` | CompareOp | Any operator from the query table above |
 | `value` | any | Value to compare against |
+
+**Response 200**
+
+```json
+{ "status": "ok" }
+```
+
+**Response 409** — condition failed
+
+```json
+{ "error": "check and put condition failed" }
+```
+
+---
+
+### Check-and-delete (CAD)
+
+```
+POST /api/tables/{table}/rows/{rowKey}/cad
+```
+
+Atomically checks a condition on the row and, only if it holds, deletes the columns in `delCols`. Without `delCols`, it deletes the whole row. Returns **409 Conflict** if the check fails.
+
+Omit `condition` to delete unconditionally. Unknown fields in the body are rejected with **400**, so a misspelled `delCols` cannot delete the whole row.
+
+**Body**
+
+```json
+{
+  "condition": {
+    "column": "status",
+    "op": "=",
+    "value": "draft"
+  },
+  "delCols": ["body", "status"]
+}
+```
+
+`condition` has the same fields as in [CAS](#check-and-set-cas).
 
 **Response 200**
 

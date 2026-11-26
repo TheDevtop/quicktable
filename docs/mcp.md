@@ -160,8 +160,10 @@ Scan, filter, and project rows. All parameters except `table` are optional.
 | `offset` | number | Skip the first N matching rows |
 | `limit` | number | Return at most N rows |
 | `countOnly` | bool | Return only a count |
+| `aggregate` | string | Return statistics over this numeric column instead of rows; cannot be combined with `countOnly` |
 | `select` | string[] | Columns to return; all columns if omitted |
 | `where` | Predicate[] | Predicates that must all hold |
+| `or` | Predicate[][] | Alternative predicate groups: a row matches if all predicates of any group hold. Cannot be combined with `where`, and no group may be empty |
 
 A predicate is `{"column": "age", "op": ">=", "value": 18}`. The operators are the same as in the REST API: `=`, `!=`, `>`, `>=`, `<`, `<=`, `CONTAINS`, `PREFIX`, `EXISTS` and `MISSING`; the last two take no `value`. Any other operator is an error. A value of a different kind than the cell never matches, except under `!=`.
 
@@ -188,10 +190,30 @@ A predicate is `{"column": "age", "op": ">=", "value": 18}`. The operators are t
 ]
 ```
 
+**Example arguments** — `or`: active adults, or rows without an `age`
+
+```json
+{
+  "table": "users",
+  "or": [
+    [{"column": "age", "op": ">=", "value": 18}, {"column": "active", "op": "=", "value": true}],
+    [{"column": "age", "op": "MISSING"}]
+  ]
+}
+```
+
 **Result** — count only
 
 ```json
 {"count":42}
+```
+
+**Result** — aggregate
+
+`count` is the number of matching rows whose column holds a number; other rows are skipped. `offset` and `limit` are ignored. When no row has a number, every field is `0`.
+
+```json
+{"count":3,"sum":90,"min":25,"max":35,"avg":30}
 ```
 
 ---
@@ -405,6 +427,108 @@ An empty row `{}` gets a key but stores nothing, as with `qte_insert_row`.
 
 ---
 
+### `qte_get_cells`
+
+Retrieve selected columns of a row. Columns the row does not have are left out. Unlike `qte_get_row`, a row that does not exist gives an empty object, not an error.
+
+**Parameters** — `table`, `rowKey`, `columns` (string array) (all required)
+
+**Result**
+
+```json
+{"email":"alice@example.com","age":30}
+```
+
+---
+
+### `qte_row_exists`
+
+Check whether a row holds any cell, without reading its values.
+
+**Parameters** — `table`, `rowKey` (both required)
+
+**Result**
+
+```json
+{"exists":true}
+```
+
+---
+
+### `qte_list_columns`
+
+List the distinct column names used by any row of a table, sorted. This scans every key of the table.
+
+> **Note:** Listing a table that does not exist is not an error. It returns an empty list.
+
+**Parameters** — `table` (required)
+
+**Result**
+
+```json
+["active","age","email"]
+```
+
+---
+
+### `qte_cad`
+
+Atomically check a condition on one column of a row and, if it holds, delete the columns in `delCols`, or the whole row if `delCols` is omitted. Omit `condition` to delete unconditionally.
+
+**Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `table` | string | **Required.** |
+| `rowKey` | string | **Required.** |
+| `condition` | object | `{"column": name, "op": op, "value": v}`; operators as in `qte_query` `where` |
+| `delCols` | string[] | Columns to delete; the whole row if omitted |
+
+Unknown arguments and unknown `condition` keys are rejected, so a misspelled `delCols` cannot delete the whole row.
+
+**Example arguments**
+
+```json
+{
+  "table": "posts",
+  "rowKey": "a3f10c2b",
+  "condition": {"column": "status", "op": "=", "value": "draft"},
+  "delCols": ["body", "status"]
+}
+```
+
+**Result**
+
+```json
+{"status":"ok"}
+```
+
+If the condition does not hold, the result is an error `check and put condition failed` and nothing is deleted.
+
+---
+
+### `qte_delete_query`
+
+Delete every row matching a filter in one transaction: all of them are deleted or none are. This cannot be undone.
+
+**Parameters** — `table` (required), and the filter parameters of `qte_query`: `prefix`, `startKey`, `endKey`, `orderDesc`, `offset`, `limit`, `where` and `or`. `offset` and `limit` apply as in `qte_query`, so `limit` lets you delete in chunks. A very large delete can fail because it does not fit in one transaction; nothing is deleted then.
+
+Unknown arguments are rejected, so a misspelled `where` cannot delete every row. With no filter at all, every row of the table is deleted.
+
+**Example arguments**
+
+```json
+{"table": "users", "where": [{"column": "active", "op": "=", "value": false}]}
+```
+
+**Result**
+
+```json
+{"deleted":12}
+```
+
+---
+
 ## Tool summary
 
 | Tool | Reads | Writes | Atomic |
@@ -427,6 +551,11 @@ An empty row `{}` gets a key but stores nothing, as with `qte_insert_row`.
 | `qte_list_tables` | ✓ | | |
 | `qte_drop_table` | | ✓ | ✓ |
 | `qte_list_rows` | ✓ | | |
+| `qte_get_cells` | ✓ | | |
+| `qte_row_exists` | ✓ | | |
+| `qte_list_columns` | ✓ | | |
+| `qte_cad` | ✓ | ✓ | ✓ |
+| `qte_delete_query` | ✓ | ✓ | ✓ |
 
 ---
 
@@ -452,5 +581,7 @@ Tool errors are returned as MCP tool results with `isError: true`. The text cont
 | `cell value is not numeric` | Increment on a non-numeric cell |
 | `cell value is not a string` | Append/prepend on wrong type |
 | `unknown comparison operator: ...` | Bad `op` in a `where` predicate or `cas` condition |
-| `unknown argument ...`, `unknown condition key ...`, `mutation N: ...` | Misspelled or malformed `qte_cas` / `qte_batch_write` input |
-| `check and put condition failed` | CAS condition not satisfied |
+| `unknown argument ...`, `unknown condition key ...`, `mutation N: ...` | Misspelled or malformed `qte_cas` / `qte_cad` / `qte_batch_write` / `qte_delete_query` input |
+| `where and or cannot be combined`, `or group N is empty` | Malformed `qte_query` / `qte_delete_query` filter |
+| `countOnly and aggregate cannot be combined` | Conflicting `qte_query` output options |
+| `check and put condition failed` | CAS or CAD condition not satisfied |

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -50,6 +51,7 @@ func RegisterRESTRoutes(mux *http.ServeMux, db *qte.DB) {
 	// Table operations: /api/tables, /api/tables/{table}
 	mux.HandleFunc("GET /api/tables", h.handleListTables)
 	mux.HandleFunc("DELETE /api/tables/{table}", h.handleDropTable)
+	mux.HandleFunc("GET /api/tables/{table}/columns", h.handleListColumns)
 
 	// Single cell operations: /api/tables/{table}/rows/{rowKey}/columns/{column}
 	mux.HandleFunc("GET /api/tables/{table}/rows/{rowKey}/columns/{column}", h.handleGetCell)
@@ -58,6 +60,7 @@ func RegisterRESTRoutes(mux *http.ServeMux, db *qte.DB) {
 
 	// Single row operations: /api/tables/{table}/rows/{rowKey}
 	mux.HandleFunc("GET /api/tables/{table}/rows/{rowKey}", h.handleGetRow)
+	mux.HandleFunc("HEAD /api/tables/{table}/rows/{rowKey}", h.handleRowExists)
 	mux.HandleFunc("PUT /api/tables/{table}/rows/{rowKey}", h.handlePutRow)
 	mux.HandleFunc("DELETE /api/tables/{table}/rows/{rowKey}", h.handleDeleteRow)
 
@@ -67,15 +70,17 @@ func RegisterRESTRoutes(mux *http.ServeMux, db *qte.DB) {
 
 	// Query table: /api/tables/{table}/query
 	mux.HandleFunc("POST /api/tables/{table}/query", h.handleQuery)
+	mux.HandleFunc("POST /api/tables/{table}/query/delete", h.handleQueryDelete)
 
 	// Batch operations: /api/tables/{table}/batch
 	mux.HandleFunc("POST /api/tables/{table}/batch", h.handleBatch)
 
-	// Atomic operations: /api/tables/{table}/rows/{rowKey}/incr, append, prepend, cas
+	// Atomic operations: /api/tables/{table}/rows/{rowKey}/incr, append, prepend, cas, cad
 	mux.HandleFunc("POST /api/tables/{table}/rows/{rowKey}/incr", h.handleIncr)
 	mux.HandleFunc("POST /api/tables/{table}/rows/{rowKey}/append", h.handleAppend)
 	mux.HandleFunc("POST /api/tables/{table}/rows/{rowKey}/prepend", h.handlePrepend)
 	mux.HandleFunc("POST /api/tables/{table}/rows/{rowKey}/cas", h.handleCAS)
+	mux.HandleFunc("POST /api/tables/{table}/rows/{rowKey}/cad", h.handleCAD)
 }
 
 type restHandler struct {
@@ -102,6 +107,19 @@ func (h *restHandler) handleDropTable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+// GET /api/tables/{table}/columns
+func (h *restHandler) handleListColumns(w http.ResponseWriter, r *http.Request) {
+	cols, err := h.db.ListColumns(r.PathValue("table"))
+	if err != nil {
+		writeQTEError(w, err)
+		return
+	}
+	if cols == nil {
+		cols = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"columns": cols})
 }
 
 // GET /api/tables/{table}/rows
@@ -175,12 +193,18 @@ func (h *restHandler) handleDeleteCell(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
-// GET /api/tables/{table}/rows/{rowKey}
+// GET /api/tables/{table}/rows/{rowKey}[?column=a&column=b]
 func (h *restHandler) handleGetRow(w http.ResponseWriter, r *http.Request) {
 	table := r.PathValue("table")
 	rowKey := r.PathValue("rowKey")
 
-	row, err := h.db.GetRow(table, rowKey)
+	var row qte.Row
+	var err error
+	if cols := r.URL.Query()["column"]; len(cols) > 0 {
+		row, err = h.db.GetCells(table, rowKey, cols)
+	} else {
+		row, err = h.db.GetRow(table, rowKey)
+	}
 	if err != nil {
 		writeQTEError(w, err)
 		return
@@ -191,6 +215,21 @@ func (h *restHandler) handleGetRow(w http.ResponseWriter, r *http.Request) {
 		"rowKey":  rowKey,
 		"columns": row,
 	})
+}
+
+// HEAD /api/tables/{table}/rows/{rowKey}
+func (h *restHandler) handleRowExists(w http.ResponseWriter, r *http.Request) {
+	ok, err := h.db.RowExists(r.PathValue("table"), r.PathValue("rowKey"))
+	switch {
+	case errors.Is(err, qte.ErrInvalidTable), errors.Is(err, qte.ErrInvalidRowKey):
+		w.WriteHeader(http.StatusBadRequest)
+	case err != nil:
+		w.WriteHeader(http.StatusInternalServerError)
+	case !ok:
+		w.WriteHeader(http.StatusNotFound)
+	default:
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 // PUT /api/tables/{table}/rows/{rowKey}
@@ -247,17 +286,24 @@ func (h *restHandler) handleInsertRow(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// QueryFilter selects the rows of a query or a delete by query.
+type QueryFilter struct {
+	Prefix    string          `json:"prefix,omitempty"`
+	StartKey  string          `json:"startKey,omitempty"`
+	EndKey    string          `json:"endKey,omitempty"`
+	OrderDesc bool            `json:"orderDesc,omitempty"`
+	Offset    int             `json:"offset,omitempty"`
+	Limit     int             `json:"limit,omitempty"`
+	Where     []PredicateIn   `json:"where,omitempty"`
+	Or        [][]PredicateIn `json:"or,omitempty"`
+}
+
 // QueryRequest defines query parameters for POST /api/tables/{table}/query
 type QueryRequest struct {
-	Prefix     string        `json:"prefix,omitempty"`
-	StartKey   string        `json:"startKey,omitempty"`
-	EndKey     string        `json:"endKey,omitempty"`
-	SelectCols []string      `json:"select,omitempty"`
-	OrderDesc  bool          `json:"orderDesc,omitempty"`
-	Offset     int           `json:"offset,omitempty"`
-	Limit      int           `json:"limit,omitempty"`
-	Where      []PredicateIn `json:"where,omitempty"`
-	CountOnly  bool          `json:"countOnly,omitempty"`
+	QueryFilter
+	SelectCols []string `json:"select,omitempty"`
+	CountOnly  bool     `json:"countOnly,omitempty"`
+	Aggregate  string   `json:"aggregate,omitempty"`
 }
 
 type PredicateIn struct {
@@ -278,17 +324,29 @@ func (h *restHandler) handleQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	qb := h.db.Query(table).
-		WithPrefix(req.Prefix).
-		WithKeyRange(req.StartKey, req.EndKey).
-		Select(req.SelectCols...).
-		Offset(req.Offset).
-		Limit(req.Limit)
-	if req.OrderDesc {
-		qb.OrderDesc()
+	if req.CountOnly && req.Aggregate != "" {
+		writeError(w, http.StatusBadRequest, "countOnly and aggregate cannot be combined")
+		return
 	}
-	for _, p := range req.Where {
-		qb.Where(p.Column, p.Op, p.Value)
+	qb, err := h.buildQuery(table, req.QueryFilter)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	qb.Select(req.SelectCols...)
+
+	if req.Aggregate != "" {
+		stats, err := qb.Aggregate(req.Aggregate)
+		if err != nil {
+			writeQTEError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"table":  table,
+			"column": req.Aggregate,
+			"stats":  stats,
+		})
+		return
 	}
 
 	if req.CountOnly {
@@ -315,6 +373,62 @@ func (h *restHandler) handleQuery(w http.ResponseWriter, r *http.Request) {
 		"rows":  rows,
 		"count": len(rows),
 	})
+}
+
+// POST /api/tables/{table}/query/delete
+func (h *restHandler) handleQueryDelete(w http.ResponseWriter, r *http.Request) {
+	table := r.PathValue("table")
+
+	// A body is required and unknown fields are rejected: a misspelled "where" must not delete every row.
+	var req QueryFilter
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json delete body: "+err.Error())
+		return
+	}
+
+	qb, err := h.buildQuery(table, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	n, err := qb.Delete()
+	if err != nil {
+		writeQTEError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"table": table, "deleted": n})
+}
+
+// buildQuery applies a filter to a new query on table.
+// The predicate groups of "or" are alternatives, so they cannot be combined with "where".
+func (h *restHandler) buildQuery(table string, f QueryFilter) (*qte.QueryBuilder, error) {
+	if len(f.Where) > 0 && len(f.Or) > 0 {
+		return nil, errors.New("where and or cannot be combined")
+	}
+
+	qb := h.db.Query(table).
+		WithPrefix(f.Prefix).
+		WithKeyRange(f.StartKey, f.EndKey).
+		Offset(f.Offset).
+		Limit(f.Limit)
+	if f.OrderDesc {
+		qb.OrderDesc()
+	}
+	for _, p := range f.Where {
+		qb.Where(p.Column, p.Op, p.Value)
+	}
+	for i, g := range f.Or {
+		if len(g) == 0 {
+			return nil, fmt.Errorf("or group %d is empty", i)
+		}
+		qb.Or()
+		for _, p := range g {
+			qb.Where(p.Column, p.Op, p.Value)
+		}
+	}
+	return qb, nil
 }
 
 // BatchRequest models POST /api/tables/{table}/batch
@@ -469,6 +583,33 @@ func (h *restHandler) handleCAS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.db.CheckAndSet(table, rowKey, req.Condition, req.SetCols); err != nil {
+		writeQTEError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+// POST /api/tables/{table}/rows/{rowKey}/cad
+type cadReq struct {
+	Condition *qte.Condition `json:"condition,omitempty"`
+	DelCols   []string       `json:"delCols,omitempty"`
+}
+
+func (h *restHandler) handleCAD(w http.ResponseWriter, r *http.Request) {
+	table := r.PathValue("table")
+	rowKey := r.PathValue("rowKey")
+
+	// Unknown fields are rejected: a misspelled "delCols" must not delete the whole row.
+	var req cadReq
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json cad body: "+err.Error())
+		return
+	}
+
+	if err := h.db.CheckAndDelete(table, rowKey, req.Condition, req.DelCols); err != nil {
 		writeQTEError(w, err)
 		return
 	}

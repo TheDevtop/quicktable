@@ -310,72 +310,46 @@ func registerMCPTools(s *server.MCPServer, db *qte.DB) {
 
 	// 8. qte_query
 	s.AddTool(
-		mcp.NewTool("qte_query",
-			mcp.WithDescription("Query, scan, filter and project rows in a table."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithString("prefix", mcp.Description("Filter by row key prefix")),
-			mcp.WithString("startKey", mcp.Description("Start range key")),
-			mcp.WithString("endKey", mcp.Description("End range key")),
-			mcp.WithBoolean("orderDesc", mcp.Description("Sort row keys in descending order")),
-			mcp.WithNumber("offset", mcp.Description("Skip first n rows")),
-			mcp.WithNumber("limit", mcp.Description("Cap maximum rows returned")),
-			mcp.WithBoolean("countOnly", mcp.Description("Return only count of matching rows")),
-			mcp.WithArray("select", mcp.WithStringItems(), mcp.Description("Columns to return; all columns if omitted")),
-			mcp.WithArray("where", mcp.Description(`Predicates that must all hold, each {"column": name, "op": op, "value": v}. `+
-				`op is one of =, !=, >, >=, <, <=, CONTAINS, PREFIX, EXISTS, MISSING; EXISTS and MISSING take no value`),
-				mcp.Items(map[string]any{
-					"type":       "object",
-					"properties": predicateProps(),
-					"required":   []string{"column", "op"},
-				})),
-		),
+		mcp.NewTool("qte_query", slices.Concat(
+			[]mcp.ToolOption{
+				mcp.WithDescription("Query, scan, filter and project rows in a table, or aggregate a numeric column over them."),
+				mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
+			},
+			filterOpts(),
+			[]mcp.ToolOption{
+				mcp.WithBoolean("countOnly", mcp.Description("Return only count of matching rows")),
+				mcp.WithString("aggregate", mcp.Description("Return count, sum, min, max and avg of this numeric column over matching rows, "+
+					"ignoring offset and limit; non-numeric cells are skipped")),
+				mcp.WithArray("select", mcp.WithStringItems(), mcp.Description("Columns to return; all columns if omitted")),
+			},
+		)...),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			prefix, _ := req.GetArguments()["prefix"].(string)
-			startKey, _ := req.GetArguments()["startKey"].(string)
-			endKey, _ := req.GetArguments()["endKey"].(string)
-			orderDesc, _ := req.GetArguments()["orderDesc"].(bool)
-			offset, _ := req.GetArguments()["offset"].(float64)
-			limit, _ := req.GetArguments()["limit"].(float64)
-			countOnly, _ := req.GetArguments()["countOnly"].(bool)
-
-			qb := db.Query(table).
-				WithPrefix(prefix).
-				WithKeyRange(startKey, endKey).
-				Offset(int(offset)).
-				Limit(int(limit))
-			if orderDesc {
-				qb.OrderDesc()
+			args := req.GetArguments()
+			countOnly, _ := args["countOnly"].(bool)
+			aggregate, _ := args["aggregate"].(string)
+			if countOnly && aggregate != "" {
+				return mcp.NewToolResultError("countOnly and aggregate cannot be combined"), nil
 			}
 
-			if raw, ok := req.GetArguments()["select"]; ok {
-				cols, ok := raw.([]any)
-				if !ok {
-					return mcp.NewToolResultError("select must be an array of column names"), nil
+			qb, err := buildQuery(db, args)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if raw, ok := args["select"]; ok {
+				cols, err := stringList(raw, "select")
+				if err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
 				}
-				for _, c := range cols {
-					s, ok := c.(string)
-					if !ok {
-						return mcp.NewToolResultError("select must be an array of column names"), nil
-					}
-					qb.Select(s)
-				}
+				qb.Select(cols...)
 			}
 
-			if raw, ok := req.GetArguments()["where"]; ok {
-				preds, ok := raw.([]any)
-				if !ok {
-					return mcp.NewToolResultError("where must be an array of predicates"), nil
+			if aggregate != "" {
+				stats, err := qb.Aggregate(aggregate)
+				if err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
 				}
-				for _, p := range preds {
-					m, ok := p.(map[string]any)
-					if !ok {
-						return mcp.NewToolResultError("each where predicate must be an object"), nil
-					}
-					col, _ := m["column"].(string)
-					op, _ := m["op"].(string)
-					qb.Where(col, qte.CompareOp(op), m["value"])
-				}
+				res, _ := json.Marshal(stats)
+				return mcp.NewToolResultText(string(res)), nil
 			}
 
 			if countOnly {
@@ -574,18 +548,9 @@ func registerMCPTools(s *server.MCPServer, db *qte.DB) {
 			table, _ := args["table"].(string)
 			rowKey, _ := args["rowKey"].(string)
 
-			var cond *qte.Condition
-			if raw, ok := args["condition"]; ok {
-				m, ok := raw.(map[string]any)
-				if !ok {
-					return mcp.NewToolResultError("condition must be an object"), nil
-				}
-				if k := unknownKey(m, "column", "op", "value"); k != "" {
-					return mcp.NewToolResultError(fmt.Sprintf("unknown condition key %q", k)), nil
-				}
-				col, _ := m["column"].(string)
-				op, _ := m["op"].(string)
-				cond = &qte.Condition{Column: col, Op: qte.CompareOp(op), Value: m["value"]}
+			cond, err := parseCondition(args)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
 			}
 
 			var setCols qte.Row
@@ -686,6 +651,269 @@ func registerMCPTools(s *server.MCPServer, db *qte.DB) {
 			return mcp.NewToolResultText(string(res)), nil
 		},
 	)
+
+	// 19. qte_get_cells
+	s.AddTool(
+		mcp.NewTool("qte_get_cells",
+			mcp.WithDescription("Retrieve selected columns of a row. Missing columns are omitted from the result."),
+			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
+			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
+			mcp.WithArray("columns", mcp.Required(), mcp.WithStringItems(), mcp.Description("Column names")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			table, _ := req.GetArguments()["table"].(string)
+			rowKey, _ := req.GetArguments()["rowKey"].(string)
+			cols, err := stringList(req.GetArguments()["columns"], "columns")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			row, err := db.GetCells(table, rowKey, cols)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			res, _ := json.Marshal(row)
+			return mcp.NewToolResultText(string(res)), nil
+		},
+	)
+
+	// 20. qte_row_exists
+	s.AddTool(
+		mcp.NewTool("qte_row_exists",
+			mcp.WithDescription("Check whether a row holds any cell, without reading its values."),
+			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
+			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			table, _ := req.GetArguments()["table"].(string)
+			rowKey, _ := req.GetArguments()["rowKey"].(string)
+
+			ok, err := db.RowExists(table, rowKey)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			res, _ := json.Marshal(map[string]bool{"exists": ok})
+			return mcp.NewToolResultText(string(res)), nil
+		},
+	)
+
+	// 21. qte_list_columns
+	s.AddTool(
+		mcp.NewTool("qte_list_columns",
+			mcp.WithDescription("List the distinct column names used in a table, sorted. Scans every key of the table."),
+			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			table, _ := req.GetArguments()["table"].(string)
+			cols, err := db.ListColumns(table)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if cols == nil {
+				cols = []string{}
+			}
+			res, _ := json.Marshal(cols)
+			return mcp.NewToolResultText(string(res)), nil
+		},
+	)
+
+	// 22. qte_cad
+	s.AddTool(
+		mcp.NewTool("qte_cad",
+			mcp.WithDescription("Atomically check a condition on one column of a row and, if it holds, delete columns, "+
+				"or the whole row if delCols is omitted. Without a condition the delete is unconditional. Unknown keys are rejected."),
+			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
+			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
+			mcp.WithObject("condition", mcp.Description(`{"column": name, "op": op, "value": v}; same operators as qte_query where`),
+				mcp.Properties(predicateProps()), mcp.AdditionalProperties(false)),
+			mcp.WithArray("delCols", mcp.WithStringItems(), mcp.Description("Columns to delete; the whole row if omitted")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.GetArguments()
+			if k := unknownKey(args, "table", "rowKey", "condition", "delCols"); k != "" {
+				return mcp.NewToolResultError(fmt.Sprintf("unknown argument %q", k)), nil
+			}
+			table, _ := args["table"].(string)
+			rowKey, _ := args["rowKey"].(string)
+
+			cond, err := parseCondition(args)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			var delCols []string
+			if raw, ok := args["delCols"]; ok {
+				if delCols, err = stringList(raw, "delCols"); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+			}
+
+			if err := db.CheckAndDelete(table, rowKey, cond, delCols); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(`{"status":"ok"}`), nil
+		},
+	)
+
+	// 23. qte_delete_query
+	s.AddTool(
+		mcp.NewTool("qte_delete_query", slices.Concat(
+			[]mcp.ToolOption{
+				mcp.WithDescription("Atomically delete every row matching a filter; offset and limit apply as in qte_query. " +
+					"Without any filter every row of the table is deleted. Irreversible. Unknown arguments are rejected."),
+				mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
+			},
+			filterOpts(),
+		)...),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.GetArguments()
+			if k := unknownKey(args, "table", "prefix", "startKey", "endKey", "orderDesc", "offset", "limit", "where", "or"); k != "" {
+				return mcp.NewToolResultError(fmt.Sprintf("unknown argument %q", k)), nil
+			}
+
+			qb, err := buildQuery(db, args)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			n, err := qb.Delete()
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			res, _ := json.Marshal(map[string]int{"deleted": n})
+			return mcp.NewToolResultText(string(res)), nil
+		},
+	)
+}
+
+// filterOpts are the row selection parameters shared by qte_query and qte_delete_query.
+func filterOpts() []mcp.ToolOption {
+	pred := map[string]any{
+		"type":       "object",
+		"properties": predicateProps(),
+		"required":   []string{"column", "op"},
+	}
+	return []mcp.ToolOption{
+		mcp.WithString("prefix", mcp.Description("Filter by row key prefix")),
+		mcp.WithString("startKey", mcp.Description("Start range key")),
+		mcp.WithString("endKey", mcp.Description("End range key")),
+		mcp.WithBoolean("orderDesc", mcp.Description("Sort row keys in descending order")),
+		mcp.WithNumber("offset", mcp.Description("Skip first n rows")),
+		mcp.WithNumber("limit", mcp.Description("Cap maximum rows")),
+		mcp.WithArray("where", mcp.Description(`Predicates that must all hold, each {"column": name, "op": op, "value": v}. `+
+			`op is one of =, !=, >, >=, <, <=, CONTAINS, PREFIX, EXISTS, MISSING; EXISTS and MISSING take no value`),
+			mcp.Items(pred)),
+		mcp.WithArray("or", mcp.Description("Alternative predicate groups instead of where: a row matches if all predicates "+
+			"of any group hold. Cannot be combined with where."),
+			mcp.Items(map[string]any{"type": "array", "items": pred})),
+	}
+}
+
+// buildQuery applies the filter arguments of qte_query and qte_delete_query to a new query.
+func buildQuery(db *qte.DB, args map[string]any) (*qte.QueryBuilder, error) {
+	table, _ := args["table"].(string)
+	prefix, _ := args["prefix"].(string)
+	startKey, _ := args["startKey"].(string)
+	endKey, _ := args["endKey"].(string)
+	orderDesc, _ := args["orderDesc"].(bool)
+	offset, _ := args["offset"].(float64)
+	limit, _ := args["limit"].(float64)
+
+	qb := db.Query(table).
+		WithPrefix(prefix).
+		WithKeyRange(startKey, endKey).
+		Offset(int(offset)).
+		Limit(int(limit))
+	if orderDesc {
+		qb.OrderDesc()
+	}
+
+	where, hasWhere := args["where"]
+	or, hasOr := args["or"]
+	if hasWhere && hasOr {
+		return nil, errors.New("where and or cannot be combined")
+	}
+	if hasWhere {
+		conds, err := parsePredicates(where)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range conds {
+			qb.Where(c.Column, c.Op, c.Value)
+		}
+	}
+	if hasOr {
+		groups, ok := or.([]any)
+		if !ok {
+			return nil, errors.New("or must be an array of predicate arrays")
+		}
+		for i, g := range groups {
+			conds, err := parsePredicates(g)
+			if err != nil {
+				return nil, fmt.Errorf("or group %d: %w", i, err)
+			}
+			if len(conds) == 0 {
+				return nil, fmt.Errorf("or group %d is empty", i)
+			}
+			qb.Or()
+			for _, c := range conds {
+				qb.Where(c.Column, c.Op, c.Value)
+			}
+		}
+	}
+	return qb, nil
+}
+
+// parsePredicates converts a decoded JSON array of predicate objects into conditions.
+func parsePredicates(raw any) ([]qte.Condition, error) {
+	preds, ok := raw.([]any)
+	if !ok {
+		return nil, errors.New("where must be an array of predicates")
+	}
+	conds := make([]qte.Condition, 0, len(preds))
+	for _, p := range preds {
+		m, ok := p.(map[string]any)
+		if !ok {
+			return nil, errors.New("each where predicate must be an object")
+		}
+		col, _ := m["column"].(string)
+		op, _ := m["op"].(string)
+		conds = append(conds, qte.Condition{Column: col, Op: qte.CompareOp(op), Value: m["value"]})
+	}
+	return conds, nil
+}
+
+// parseCondition returns the optional condition argument of qte_cas and qte_cad, rejecting unknown keys.
+func parseCondition(args map[string]any) (*qte.Condition, error) {
+	raw, ok := args["condition"]
+	if !ok {
+		return nil, nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, errors.New("condition must be an object")
+	}
+	if k := unknownKey(m, "column", "op", "value"); k != "" {
+		return nil, fmt.Errorf("unknown condition key %q", k)
+	}
+	col, _ := m["column"].(string)
+	op, _ := m["op"].(string)
+	return &qte.Condition{Column: col, Op: qte.CompareOp(op), Value: m["value"]}, nil
+}
+
+// stringList converts a decoded JSON array of strings; name labels the error.
+func stringList(raw any, name string) ([]string, error) {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s must be an array of strings", name)
+	}
+	list := make([]string, 0, len(items))
+	for _, it := range items {
+		s, ok := it.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s must be an array of strings", name)
+		}
+		list = append(list, s)
+	}
+	return list, nil
 }
 
 // predicateProps is the JSON schema of a {column, op, value} predicate's fields.

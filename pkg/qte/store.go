@@ -12,7 +12,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -295,6 +297,18 @@ func readRow(txn *badger.Txn, prefix []byte) (Row, error) {
 	return row, nil
 }
 
+// prefixUsed reports whether any cell is stored under prefix.
+func prefixUsed(txn *badger.Txn, prefix []byte) bool {
+	opts := badger.DefaultIteratorOptions
+	opts.PrefetchValues = false
+	opts.Prefix = prefix
+	it := txn.NewIterator(opts)
+	defer it.Close()
+
+	it.Seek(prefix)
+	return it.ValidForPrefix(prefix)
+}
+
 // deleteRow deletes every column stored under prefix.
 func deleteRow(txn *badger.Txn, prefix []byte) error {
 	opts := badger.DefaultIteratorOptions
@@ -409,19 +423,7 @@ func unusedRowKey(txn *badger.Txn, table string, taken map[string]bool) (string,
 		if err != nil {
 			return "", err
 		}
-		if taken[rk] {
-			continue
-		}
-
-		prefix := encodeRowPrefix(table, rk)
-		opts := badger.DefaultIteratorOptions
-		opts.PrefetchValues = false
-		opts.Prefix = prefix
-		it := txn.NewIterator(opts)
-		it.Seek(prefix)
-		used := it.ValidForPrefix(prefix)
-		it.Close()
-		if !used {
+		if !taken[rk] && !prefixUsed(txn, encodeRowPrefix(table, rk)) {
 			return rk, nil
 		}
 	}
@@ -527,6 +529,58 @@ func (db *DB) GetRow(table, rowKey string) (Row, error) {
 	return row, nil
 }
 
+// GetCells retrieves the given columns of a row. Missing columns are omitted.
+func (db *DB) GetCells(table, rowKey string, columns []string) (Row, error) {
+	if err := ValidateTable(table); err != nil {
+		return nil, err
+	}
+	if err := ValidateRowKey(rowKey); err != nil {
+		return nil, err
+	}
+	for _, col := range columns {
+		if err := ValidateColumn(col); err != nil {
+			return nil, err
+		}
+	}
+	rk := strings.ToLower(rowKey)
+
+	row := make(Row, len(columns))
+	err := db.bdb.View(func(txn *badger.Txn) error {
+		for _, col := range columns {
+			item, err := txn.Get(encodeKey(table, rk, col))
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if row[col], err = readValue(item); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return row, nil
+}
+
+// RowExists reports whether a row holds any cell.
+func (db *DB) RowExists(table, rowKey string) (bool, error) {
+	prefix, err := rowPrefix(table, rowKey)
+	if err != nil {
+		return false, err
+	}
+
+	var ok bool
+	err = db.bdb.View(func(txn *badger.Txn) error {
+		ok = prefixUsed(txn, prefix)
+		return nil
+	})
+	return ok, err
+}
+
 // DeleteCell removes a single column from a row.
 func (db *DB) DeleteCell(table, rowKey, column string) error {
 	key, err := cellKey(table, rowKey, column)
@@ -612,6 +666,37 @@ func (db *DB) ListRows(table string) ([]string, error) {
 		return nil, err
 	}
 	return rows, nil
+}
+
+// ListColumns returns the distinct column names used in a Table, in sorted order.
+func (db *DB) ListColumns(table string) ([]string, error) {
+	if err := ValidateTable(table); err != nil {
+		return nil, err
+	}
+
+	prefix := encodeTablePrefix(table)
+	seen := make(map[string]bool)
+
+	err := db.bdb.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		opts.Prefix = prefix
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			_, _, col, err := decodeKey(it.Item().Key())
+			if err != nil {
+				return err
+			}
+			seen[col] = true
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return slices.Sorted(maps.Keys(seen)), nil
 }
 
 // DropTable removes every row and column belonging to a Table.
