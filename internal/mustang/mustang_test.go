@@ -1,8 +1,10 @@
 package mustang
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +22,18 @@ func open(t testing.TB) *Store {
 	return s
 }
 
+func load(t testing.TB, s *Store, name string, tab Table) {
+	b := s.Batch()
+	for r, row := range tab {
+		for c, v := range row {
+			b.Set(name, r, c, v)
+		}
+	}
+	if err := b.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSmoke(t *testing.T) {
 	s := open(t)
 	now := time.Now().UTC()
@@ -29,8 +43,8 @@ func TestSmoke(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	must(s.UpsertTable("users", Table{"a": {"name": "x", "age": 3.0}, "b": {"ok": true, "at": now}}))
-	must(s.UpsertValue("users2", "z", "name", "y"))
+	load(t, s, "users", Table{"a": {"name": "x", "age": 3.0}, "b": {"ok": true, "at": now}})
+	must(s.Batch().Set("users2", "z", "name", "y").Commit())
 	tabs, _ := s.ScanTables()
 	rows, _ := s.ScanRows("users")
 	cols, _ := s.ScanColumns("users")
@@ -47,22 +61,21 @@ func TestSmoke(t *testing.T) {
 	if len(col) != 1 {
 		t.Fatal("col")
 	}
-	must(s.DeleteColumn("users", "name"))
-	must(s.DeleteRow("users", "b"))
+	must(s.Batch().DeleteColumn("users", "name").DeleteRow("users", "b").Commit())
 	tab, err := s.GetTable("users")
 	must(err)
 	t.Log(tab)
 	if len(tab) != 1 {
 		t.Fatal("tab")
 	}
-	must(s.DeleteTable("users"))
+	must(s.Batch().DeleteTable("users").Commit())
 	if _, err := s.GetRow("users", "a"); err != ErrNotFound {
 		t.Fatal(err)
 	}
-	if err := s.UpsertValue("bad name", "r", "c", "v"); err == nil {
+	if err := s.Batch().Set("bad name", "r", "c", "v").Commit(); err == nil {
 		t.Fatal("name")
 	}
-	if err := s.UpsertValue("t", "r", "c", 1); err == nil {
+	if err := s.Batch().Set("t", "r", "c", 1).Commit(); err == nil {
 		t.Fatal("type")
 	}
 }
@@ -104,16 +117,13 @@ func TestBatch(t *testing.T) {
 
 func TestQuery(t *testing.T) {
 	s := open(t)
-	err := s.UpsertTable("u", Table{
+	load(t, s, "u", Table{
 		"eu-1": {"name": "ann", "age": 30.0, "admin": true},
 		"eu-2": {"name": "bob", "age": 12.0},
 		"eu-3": {"name": "cid", "age": 40.0},
 		"us-1": {"name": "dan", "age": 50.0},
 		"us-2": {"name": "eve"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	keys := func(rs []Result) (ks []string) {
 		for _, r := range rs {
 			ks = append(ks, r.Key)
@@ -199,7 +209,7 @@ func TestIncr(t *testing.T) {
 	if err != nil || v != 200.0 {
 		t.Fatal(v, err)
 	}
-	s.UpsertValue("c", "s", "n", "str")
+	s.Batch().Set("c", "s", "n", "str").Commit()
 	if _, err := s.Incr("c", "s", "n", 1); !errors.Is(err, ErrType) {
 		t.Fatal(err)
 	}
@@ -213,7 +223,7 @@ func TestIncr(t *testing.T) {
 
 func TestAgg(t *testing.T) {
 	s := open(t)
-	s.UpsertTable("u", Table{
+	load(t, s, "u", Table{
 		"a": {"age": 30.0, "name": "ann"},
 		"b": {"age": 10.0, "name": "bob", "admin": true},
 		"c": {"age": 50.0},
@@ -254,7 +264,7 @@ func TestAgg(t *testing.T) {
 
 func TestIfContains(t *testing.T) {
 	s := open(t)
-	s.UpsertValue("a", "x", "tags", "red,green")
+	s.Batch().Set("a", "x", "tags", "red,green").Commit()
 	if err := s.Batch().If("a", "x", "tags", Contains, "green").Set("a", "x", "ok", true).Commit(); err != nil {
 		t.Fatal(err)
 	}
@@ -266,15 +276,61 @@ func TestIfContains(t *testing.T) {
 	}
 }
 
+// TestOrder checks that encodings order like their values, as
+// conditions and Min/Max compare them raw.
+func TestOrder(t *testing.T) {
+	t0 := time.Date(1969, 7, 20, 20, 17, 0, 0, time.UTC)
+	vals := [][]Value{
+		{math.Inf(-1), -1e9, -1.5, -0.25, 0.0, 1e-300, 0.25, 2.0, 1e9, math.Inf(1)},
+		{t0.Add(-time.Second), t0.Add(-1), t0, t0.Add(1), t0.Add(500 * time.Millisecond), t0.Add(time.Second)},
+		{false, true},
+		{"", "a", "a\x00", "ab", "b"},
+	}
+	for _, vs := range vals {
+		for i := range vs {
+			a, _ := encode(vs[i])
+			if v, err := decode(a); err != nil || v != vs[i] {
+				t.Errorf("roundtrip %v: %v %v", vs[i], v, err)
+			}
+			if i == 0 {
+				continue
+			}
+			p, _ := encode(vs[i-1])
+			if bytes.Compare(p, a) >= 0 {
+				t.Errorf("%v sorts after %v", vs[i-1], vs[i])
+			}
+		}
+	}
+	a, _ := encode(math.Copysign(0, -1))
+	b, _ := encode(0.0)
+	if !bytes.Equal(a, b) {
+		t.Error("-0 != 0")
+	}
+	if _, err := encode(math.NaN()); !errors.Is(err, ErrType) {
+		t.Error("NaN")
+	}
+	// Times compare as instants, whatever their zone.
+	s := open(t)
+	cet := time.FixedZone("CET", 3600)
+	load(t, s, "e", Table{"a": {"at": t0}, "b": {"at": t0.Add(time.Hour)}, "c": {"at": t0.Add(-time.Hour)}})
+	if n, _ := s.Query("e").Where("at", Eq, t0.In(cet)).Count(); n != 1 {
+		t.Error("zone", n)
+	}
+	if v, _ := s.Query("e").Max("at"); v != t0.Add(time.Hour) {
+		t.Error("max", v)
+	}
+	if n, _ := s.Query("e").Where("at", Lt, t0).Count(); n != 1 {
+		t.Error("lt", n)
+	}
+}
+
 func BenchmarkContains(b *testing.B) {
 	s := open(b)
 	tab := Table{}
 	for i := range 20000 {
 		tab[fmt.Sprintf("r%05d", i)] = Row{"name": fmt.Sprintf("user-%05d-somewhat-long-name", i)}
 	}
-	if err := s.UpsertTable("t", tab); err != nil {
-		b.Fatal(err)
-	}
+	load(b, s, "t", tab)
 	b.ReportAllocs()
 	for b.Loop() {
 		n, err := s.Query("t").Where("name", Contains, "00042").Count()
@@ -294,13 +350,27 @@ func BenchmarkQuery(b *testing.B) {
 		}
 		tab[fmt.Sprintf("r%05d", i)] = row
 	}
-	if err := s.UpsertTable("t", tab); err != nil {
-		b.Fatal(err)
-	}
+	load(b, s, "t", tab)
 	b.ReportAllocs()
 	for b.Loop() {
 		if _, err := s.Query("t").Where("age", Ge, 50.0).Select("name").Run(); err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkCount(b *testing.B) {
+	s := open(b)
+	tab := Table{}
+	for i := range 20000 {
+		tab[fmt.Sprintf("r%05d", i)] = Row{"age": float64(i % 100), "at": time.Unix(int64(i), 0)}
+	}
+	load(b, s, "t", tab)
+	b.ReportAllocs()
+	for b.Loop() {
+		n, err := s.Query("t").Where("age", Ge, 50.0).Where("at", Gt, time.Unix(100, 0)).Count()
+		if err != nil || n == 0 {
+			b.Fatal(n, err)
 		}
 	}
 }

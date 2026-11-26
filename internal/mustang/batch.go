@@ -132,11 +132,11 @@ func apply(txn *badger.Txn, o op) error {
 	case opDel:
 		return txn.Delete(o.key)
 	case opIf:
-		v, ok, err := get(txn, o.key)
+		b, err := get(txn, o.key)
 		if err != nil {
 			return err
 		}
-		if !o.cond.holds(v, ok) {
+		if !o.cond.holds(b) {
 			return fmt.Errorf("%w: %q %v", ErrCondition, o.key, o.cond.op)
 		}
 		return nil
@@ -164,26 +164,29 @@ func apply(txn *badger.Txn, o op) error {
 	return nil
 }
 
-// get reads one cell; ok is false when it is absent.
-func get(txn *badger.Txn, k []byte) (Value, bool, error) {
+// get reads the encoded value of one cell; it is nil when absent.
+func get(txn *badger.Txn, k []byte) ([]byte, error) {
 	item, err := txn.Get(k)
 	if errors.Is(err, badger.ErrKeyNotFound) {
-		return nil, false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	v, err := value(item)
-	return v, err == nil, err
+	return item.ValueCopy(nil)
 }
 
 func incr(txn *badger.Txn, k []byte, delta float64) (float64, error) {
-	v, ok, err := get(txn, k)
+	b, err := get(txn, k)
 	if err != nil {
 		return 0, err
 	}
 	n := 0.0
-	if ok {
+	if b != nil {
+		v, err := decode(b)
+		if err != nil {
+			return 0, err
+		}
 		f, isNum := v.(float64)
 		if !isNum {
 			return 0, fmt.Errorf("%w: counter %q is %T", ErrType, k, v)
@@ -191,7 +194,7 @@ func incr(txn *badger.Txn, k []byte, delta float64) (float64, error) {
 		n = f
 	}
 	n += delta
-	b, err := encode(n)
+	b, err = encode(n)
 	if err != nil {
 		return 0, err
 	}
@@ -235,11 +238,16 @@ func (s *Store) GetValues(cells []Cell) ([]Value, error) {
 	out := make([]Value, len(cells))
 	err := s.db.View(func(txn *badger.Txn) error {
 		for i, c := range cells {
-			v, _, err := get(txn, key(c.Table, c.Row, c.Col))
+			b, err := get(txn, key(c.Table, c.Row, c.Col))
 			if err != nil {
 				return err
 			}
-			out[i] = v
+			if b == nil {
+				continue
+			}
+			if out[i], err = decode(b); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
