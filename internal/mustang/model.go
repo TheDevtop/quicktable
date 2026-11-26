@@ -1,25 +1,5 @@
 package mustang
 
-/*
-	Mustang is a wide-column database engine,
-	using Badger as its storage engine
-
-	Data model: Table->RowKey->Column->Value
-	Table (string; without whitespace)
-	RowKey (string; without whitespace)
-	Column (string; without whitespace)
-	Value (string | dateTime | bool | number)
-
-	dateTime (string; formatted string)
-	number (float64)
-
-	Tables and rows exist only through their cells.
-	Each cell is one Badger key, laid out row-major:
-
-		key   = table \x00 rowKey \x00 column
-		value = tag byte, payload
-*/
-
 import (
 	"bytes"
 	"encoding/binary"

@@ -1,17 +1,5 @@
 package mustang
 
-/*
-	Mustang is a wide-column database engine,
-	using Badger as its storage engine
-
-	Implement basic storage operations here.
-	Mustang needs to be optimized for fast reading
-
-	Scan lists the names one level down: tables, rowKeys of a table,
-	columns of a table. Column operations act on one column across
-	every row of a table; value operations act on a single cell.
-*/
-
 import (
 	"bytes"
 
