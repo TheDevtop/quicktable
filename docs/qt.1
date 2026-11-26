@@ -1,397 +1,334 @@
 .TH QT 1
 .SH NAME
-qt \- Quicktable command-line client
+qt \- Quicktable shell
 .SH SYNOPSIS
 .B qt
 [
-.B -addr
-.I url
+.B -d
+.I dir
 ] [
-.B -token
-.I token
-]
-.I command
-[
-.I arg ...
+.B -m
 ]
 .SH DESCRIPTION
 .I Qt
-talks to a Quicktable server over its REST API.
-Each invocation runs one
-.I command
-against the server at
-.IR url ,
+is an interactive shell on the Mustang wide-column engine.
+It opens the store in
+.IR dir ,
 by default
-.BR http://localhost:16000 .
+.BR ./data ,
+or with
+.B -m
+an empty store held in memory and lost on exit.
 .PP
-Results are written to standard output:
-values, rows and query results as indented JSON;
-table names and row keys as plain lines of text.
-Commands that only modify state print nothing.
-Diagnostics go to standard error.
+A store holds tables, a table holds rows named by a
+.IR rowkey ,
+and a row holds values named by a
+.IR column .
+Rows need not share columns,
+and a row or table exists only while it holds a value.
+Names may not be empty
+or contain white space.
 .PP
-Arguments named
-.I json-*
-must be a single JSON document,
-so quote them for the shell.
-The
-.B -addr
+On a terminal,
+.I qt
+prompts with
+.RB \(lq ":\ " \(rq
+and reads commands from a line editor.
+Up and down step through the history,
+control-C discards the line,
+and control-D on an empty line quits.
+While a batch is open the prompt counts the writes it holds,
+as in
+.RB \(lq "batch 2:\ " \(rq.
+Errors are reported and the shell carries on.
+.PP
+Otherwise
+.I qt
+reads one command per line from standard input,
+skipping blank lines and lines starting with
+.BR # ,
+and stops at the first error;
+see
+.BR DIAGNOSTICS .
+.SS Values
+A value is a number, string, boolean or time,
+told apart by its spelling:
+.TP
+.B 30 -1.5 2e3
+a number, stored as a 64-bit float.
+Only words starting with a digit, sign or point are numbers,
+so
+.B inf
 and
-.B -token
-flags must precede the command.
+.B nan
+are strings.
+.TP
+.B true false
+a boolean.
+.TP
+.B 2026-11-26T10:00:00Z
+a time, in RFC 3339 form.
+It is stored as an instant in UTC;
+the zone is not kept.
+.TP
+.B \(dqtext\(dq
+a string.
+Any other word is a string too,
+but quoting makes one of a word that would be read as another type,
+.BR \(dq42\(dq ,
+or holds white space,
+.BR "\(dqAnn A\(dq" .
+Quoted strings take Go backslash escapes.
 .PP
-Every request carries
-.I token
-as a bearer token,
-which must match the token the server was started with.
-Prefer setting
-.B QUICKTABLE_TOKEN
-over
-.BR -token :
-command-line arguments are visible to other users in the process list.
-.SS Server
+Values are printed in the same form,
+strings always quoted,
+so anything printed can be typed back.
+.SS Reading
 .TP
-.B health
-Exit 0 if the server is up and answering requests, 1 otherwise.
-Needs no token.
-.SS Tables
-.TP
-.B list-tables
+.B tables
 Print the name of every table, one per line, sorted.
 .TP
-.BI drop-table " table"
+.BI rows " table"
+Print the key of every row, one per line, sorted.
+.TP
+.BI cols " table"
+Print the name of every column used by any row,
+one per line.
+This scans every key of the table.
+.TP
+.BI get " table \fR[\fProwkey \fR[\fPcolumn\fR]]\fP"
+Print a whole table, one row or one value.
+A row prints as its key followed by
+.IB column = value
+for each of its columns, sorted.
+.TP
+.BI column " table column"
+Print the key and value of every row that has
+.IR column .
+.TP
+.BI mget " table rowkey column \fR[\fPtable rowkey column ...\fR]\fP"
+Print the named values, read from one consistent snapshot,
+each after its table, rowkey and column.
+A missing value prints as
+.BR - .
+.PP
+On a terminal,
+.BR rows ,
+.BR cols ,
+.B get
+and
+.B drop
+without a table offer the tables to choose from.
+.SS Writing
+Each write is applied at once,
+unless a batch is open.
+On a terminal a write prints
+.BR ok .
+.TP
+.BI set " table rowkey column value \fR[\fPcolumn value ...\fR]\fP"
+Set one or more values of a row.
+.TP
+.BI incr " table rowkey column \fR[\fPdelta\fR]\fP"
+Add
+.IR delta ,
+by default 1,
+to a number and print the result.
+A missing value counts as 0.
+Concurrent increments are retried, never lost.
+.TP
+.BI del " table rowkey \fR[\fPcolumn\fR]\fP"
+Delete a row, or one of its values.
+Deleting what does not exist is not an error.
+.TP
+.BI dropcol " table column"
+Delete
+.I column
+from every row of
+.IR table .
+.TP
+.BI drop " table"
 Delete
 .I table
 and all its rows.
-Dropping a table that does not exist is not an error.
-.TP
-.BI list-columns " table"
-Print the name of every column used by any row of
-.IR table ,
-one per line, sorted.
-This scans every key of the table.
-.SS Cells
-.TP
-.BI get-cell " table rowkey column"
-Print the value of one cell.
-.TP
-.BI set-cell " table rowkey column json-value"
-Set one cell to
-.IR json-value ,
-a JSON number, string or boolean:
-.BR 42 ,
-.BR '"text"' ,
-.BR true .
-Arrays, objects and
-.B null
-are rejected.
-.TP
-.BI del-cell " table rowkey column"
-Remove one cell.
-.SS Rows
-.TP
-.BI list-rows " table"
-Print the key of every row in
-.IR table ,
-one per line, sorted.
-Listing a table that does not exist prints nothing.
-.TP
-.BI get-row " table rowkey"
-Print all columns of a row as a JSON object.
-.TP
-.BI get-cells " table rowkey column \fR...\fP"
-Print the named columns of a row as a JSON object.
-Columns the row does not have are left out;
-a row that does not exist prints
-.BR {} .
-.TP
-.BI row-exists " table rowkey"
-Print
-.B true
-if the row holds any cell,
-.B false
-otherwise.
-.TP
-.BI set-row " table rowkey json-columns"
-Merge the columns of the JSON object
-.I json-columns
-into the row.
-Columns not named are left alone.
-.TP
-.BI insert-row " table \fR[\fPjson-columns\fR]"
-Create a row with a server-generated, unused key and print the key.
-Without
-.I json-columns
-only the key is printed:
-a row exists only while it holds a cell.
-.TP
-.BI del-row " table rowkey"
-Remove a row.
+On a terminal this asks for confirmation first.
 .SS Queries
 .TP
-.BI query " table \fR[\fPjson-query\fR]"
-Scan
-.I table
-and print a JSON object with fields
-.BR table ,
-.B rows
-(each with
-.B rowKey
-and
-.BR columns )
-and
-.BR count .
-Without
-.I json-query
-all rows are returned.
-.I Json-query
-is an object with any of the fields:
+.BI query " table \fR[\fPclause ...\fR]\fP"
+Print every matching row in key order,
+then the number of rows.
+.TP
+.BI count " table \fR[\fPclause ...\fR]\fP"
+Print the number of matching rows.
+.TP
+.BI sum " table column \fR[\fPclause ...\fR]\fP"
+.PD 0
+.TP
+.BI avg " table column \fR[\fPclause ...\fR]\fP"
+.PD
+Print the sum or mean of
+.I column
+over the matching rows that have it.
+Its values must all be numbers.
+.TP
+.BI min " table column \fR[\fPclause ...\fR]\fP"
+.PD 0
+.TP
+.BI max " table column \fR[\fPclause ...\fR]\fP"
+.PD
+Print the smallest or largest value of
+.I column
+over the matching rows.
+Its values must all be of one type.
+.PP
+Without clauses every row matches.
+The clauses are:
 .RS
 .TP
-.B prefix
-string; only keys with this prefix.
+.BI prefix " p"
+only rows whose key starts with
+.IR p .
 .TP
-.B startKey
-string; first key of the range.
+.BI from " key"
+only rows whose key is at least
+.IR key .
 .TP
-.B endKey
-string; end of the range.
+.BI to " key"
+only rows whose key is less than
+.IR key .
 .TP
-.B select
-array of column names to return.
+.BI where " column op \fR[\fPvalue\fR]\fP"
+only rows where the test holds;
+given more than once, all must hold.
 .TP
-.B orderDesc
-boolean; scan in descending key order.
+.BI select " column ..."
+print only these columns.
 .TP
-.B offset
-number of matching rows to skip.
-.TP
-.B limit
-maximum number of rows to return.
-.TP
-.B where
-array of predicates
-.BR "{\(dqcolumn\(dq: \fIname\fP, \(dqop\(dq: \fIop\fP, \(dqvalue\(dq: \fIv\fP}" ,
-all of which must hold.
-.TP
-.B or
-array of predicate arrays;
-a row matches if all predicates of any array hold.
-Cannot be combined with
-.BR where .
-.TP
-.B countOnly
-boolean; return only
-.BR count .
-With
-.B countOnly
-only
-.B count
-is printed.
-.TP
-.B aggregate
-column name; print only an object with the
-.BR count ,
-.BR sum ,
-.BR min ,
-.B max
-and
-.B avg
-of the numeric values of that column in matching rows.
-Rows where it is missing or not a number are skipped,
-and
-.B offset
-and
-.B limit
-are ignored.
-Cannot be combined with
-.BR countOnly .
+.BI limit " n"
+stop after
+.I n
+matching rows;
+0 means no limit.
 .RE
-.TP
-.BI del-query " table json-filter"
-Delete every row of
-.I table
-matching
-.I json-filter
-in one transaction and print how many were deleted.
-.I Json-filter
-takes the fields of
-.I json-query
-except
-.BR select ,
-.B countOnly
+.PP
+The operators are
+.BR = ,
+.BR != ,
+.BR < ,
+.BR <= ,
+.BR > ,
+.BR >= ,
+.B prefix
 and
-.BR aggregate ;
-.B offset
+.B contains
+(the value is a string),
 and
-.B limit
-apply as in
-.BR query .
-Unknown keys are rejected,
-so a misspelled
-.B where
-never deletes every row;
-.B {}
-deletes every row.
+.B exists
+and
+.BR missing ,
+which take no value.
+A value of another type than the operand never matches,
+not even
+.BR != .
+Numbers, strings, booleans and times order as expected,
+strings bytewise.
 .SS Batches
 .TP
-.BI batch-get " table key \fR...\fP"
-Print a JSON object mapping each key to its row.
-.TP
-.BI batch-write " table json-mutations"
-Apply a JSON array of mutations in one transaction:
-all succeed or none do.
-Each mutation is an object with
-.B rowKey
-and any of
-.B setCols
-(object of columns to set),
-.B delCols
-(array of columns to delete first)
+.B begin
+Open a batch.
+Writes are collected instead of applied,
 and
-.B delete
-(true removes the whole row).
-Unknown keys are rejected.
+.B incr
+prints nothing.
 .TP
-.BI batch-delete " table key \fR...\fP"
-Delete every named row.
-.TP
-.BI batch-insert " table json-rows"
-Insert a JSON array of row objects in one transaction,
-each under a new server-generated key,
-and print the keys one per line in the order of the rows.
-.SS Atomic operations
-.TP
-.BI incr " table rowkey column delta"
-Add the JSON number
-.I delta
-to a numeric cell and print the new value.
-.TP
-.BI append " table rowkey column value"
-Append
-.I value
-to a string cell and print the new value.
-.I Value
-is taken literally, not as JSON.
-.TP
-.BI prepend " table rowkey column value"
-As
-.BR append ,
-but at the front.
-.TP
-.BI cas " table rowkey json-body"
-Check and set.
-.I Json-body
-is
-.BR "{\(dqcondition\(dq: \fIcond\fP, \(dqsetCols\(dq: \fIcolumns\fP}" ,
-where
-.I cond
-is
-.BR "{\(dqcolumn\(dq: \fIname\fP, \(dqop\(dq: \fIop\fP, \(dqvalue\(dq: \fIv\fP}" .
-If the condition holds, the columns in
-.I columns
-are written to the row atomically.
-Without a condition the write is unconditional.
-Keys match regardless of case;
-unknown keys are rejected,
-so a misspelled
-.B condition
-never becomes an unconditional write.
-.TP
-.BI cad " table rowkey json-body"
-Check and delete.
-.I Json-body
-is
-.BR "{\(dqcondition\(dq: \fIcond\fP, \(dqdelCols\(dq: \fIcolumns\fP}" ,
+.BI if " table rowkey column op \fR[\fPvalue\fR]\fP"
+Add a condition to the batch,
 with
-.I cond
+.I op
 as in
-.BR cas .
-If the condition holds, the columns named in the array
-.I columns
-are deleted atomically,
-or the whole row if
-.B delCols
-is absent.
-Without a condition the delete is unconditional.
-Unknown keys are rejected,
-so a misspelled
-.B delCols
-never deletes the whole row.
-.SH ENVIRONMENT
+.BR where .
 .TP
-.B QUICKTABLE_ADDR
-Default server address;
-.B -addr
-overrides it.
+.B commit
+Apply the batch in one transaction,
+conditions and writes in the order they were given.
+If a condition fails, a write is invalid,
+or a value tested by
+.B if
+was changed by another writer since,
+nothing is written.
 .TP
-.B QUICKTABLE_TOKEN
-Default bearer token;
-.B -token
-overrides it.
+.B abort
+Discard the batch.
+.PP
+Quitting with an open batch asks whether to commit or discard it;
+at the end of a script it is discarded with a warning.
+.SS Other
+.TP
+.B help
+Print a summary of the commands.
+.TP
+.B quit
+Leave
+.IR qt .
 .SH EXAMPLES
 Store and read back a counter:
 .IP
 .EX
-qt set-cell stats 00000001 hits 0
-qt incr stats 00000001 hits 1
-qt get-cell stats 00000001 hits
+: set stats 00000001 hits 0
+: incr stats 00000001 hits
+1
+: get stats 00000001 hits
+1
 .EE
 .PP
-Insert a user and list the names of the first ten adults whose key starts with
+Names of the first ten adults whose key starts with
 .BR a :
 .IP
 .EX
-qt insert-row users '{"name": "ann", "age": 31}'
-qt query users '{"prefix": "a", "limit": 10, "select": ["name"],
-	"where": [{"column": "age", "op": ">=", "value": 18}]}'
+: query users prefix a where age >= 18 select name limit 10
 .EE
 .PP
 Rename only if the name is unchanged:
 .IP
 .EX
-qt cas users a3f10c2b '{"condition": {"column": "name", "op": "=",
-	"value": "ann"}, "setCols": {"name": "anna"}}'
+: begin
+batch 0: if users a3f10c2b name = "ann"
+batch 1: set users a3f10c2b name "anna"
+batch 2: commit
 .EE
 .PP
-Average age of users that are active or have no status:
+Average age of users that have a status:
 .IP
 .EX
-qt query users '{"aggregate": "age", "or": [
-	[{"column": "active", "op": "=", "value": true}],
-	[{"column": "status", "op": "MISSING"}]]}'
+: avg users age where status exists
 .EE
 .PP
-Delete inactive users, at most 1000 at a time:
+Load a scratch store from a script:
 .IP
 .EX
-qt del-query users '{"limit": 1000,
-	"where": [{"column": "active", "op": "=", "value": false}]}'
-.EE
-.PP
-Talk to another server:
-.IP
-.EX
-QUICKTABLE_ADDR=http://db:16000 QUICKTABLE_TOKEN=$(cat ~/.qt-token) qt list-tables
+qt -m <<EOF
+set users ann name "Ann A" age 31 joined 2026-11-26T10:00:00Z
+set users bob name Bob age 17
+count users where age >= 18
+EOF
 .EE
 .SH SOURCE
 .B cmd/client
 .br
-.B pkg/client
+.B internal/mustang
 .SH SEE ALSO
-.IR quicktable (1),
-.I docs/rest.md
-for the REST API and the operators accepted in
-.BR where ,
-.B or
-and
-.B cas
-and
-.B cad
-conditions.
+.IR quicktable (1)
 .SH DIAGNOSTICS
 Exit status is 0 on success,
-1 if the request failed or the server returned an error,
+1 if the store cannot be opened or a script command fails,
 reported as
-.B "error: quicktable: \fIstatus message\fP" ,
+.BI "qt: line" " n" ": " message\fR,
 and 2 on a usage error.
+.SH BUGS
+The store cannot be shared:
+.I qt
+cannot open a directory a running server or another
+.I qt
+holds.
+.PP
+A column named after a clause cannot follow
+.BR select .
