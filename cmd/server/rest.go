@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -20,6 +21,33 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 // writeError writes an error response in JSON format.
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// writeOK writes the reply of a write that has nothing else to report.
+func writeOK(w http.ResponseWriter) {
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+// readJSON decodes the request body into dst, or answers 400 and reports false.
+// With strict, unknown fields are rejected.
+func readJSON(w http.ResponseWriter, r *http.Request, what string, dst any, strict bool) bool {
+	dec := json.NewDecoder(r.Body)
+	if strict {
+		dec.DisallowUnknownFields()
+	}
+	if err := dec.Decode(dst); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json "+what+" body: "+err.Error())
+		return false
+	}
+	return true
+}
+
+// orEmpty returns s, or an empty slice if s is nil, so it encodes as [] rather than null.
+func orEmpty[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }
 
 // writeQTEError converts engine errors to HTTP status codes and messages.
@@ -45,7 +73,7 @@ func RegisterRESTRoutes(mux *http.ServeMux, db *qte.DB) {
 
 	// Liveness: answers whenever the server is serving requests.
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		writeOK(w)
 	})
 
 	// Table operations: /api/tables, /api/tables/{table}
@@ -94,10 +122,7 @@ func (h *restHandler) handleListTables(w http.ResponseWriter, r *http.Request) {
 		writeQTEError(w, err)
 		return
 	}
-	if tables == nil {
-		tables = []string{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"tables": tables})
+	writeJSON(w, http.StatusOK, map[string]any{"tables": orEmpty(tables)})
 }
 
 // DELETE /api/tables/{table}
@@ -106,7 +131,7 @@ func (h *restHandler) handleDropTable(w http.ResponseWriter, r *http.Request) {
 		writeQTEError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	writeOK(w)
 }
 
 // GET /api/tables/{table}/columns
@@ -116,10 +141,7 @@ func (h *restHandler) handleListColumns(w http.ResponseWriter, r *http.Request) 
 		writeQTEError(w, err)
 		return
 	}
-	if cols == nil {
-		cols = []string{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"columns": cols})
+	writeJSON(w, http.StatusOK, map[string]any{"columns": orEmpty(cols)})
 }
 
 // GET /api/tables/{table}/rows
@@ -129,10 +151,7 @@ func (h *restHandler) handleListRows(w http.ResponseWriter, r *http.Request) {
 		writeQTEError(w, err)
 		return
 	}
-	if rows == nil {
-		rows = []string{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"rows": rows})
+	writeJSON(w, http.StatusOK, map[string]any{"rows": orEmpty(rows)})
 }
 
 // GET /api/tables/{table}/rows/{rowKey}/columns/{column}
@@ -166,8 +185,7 @@ func (h *restHandler) handlePutCell(w http.ResponseWriter, r *http.Request) {
 	column := r.PathValue("column")
 
 	var req putCellReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json request body: "+err.Error())
+	if !readJSON(w, r, "request", &req, false) {
 		return
 	}
 
@@ -176,7 +194,7 @@ func (h *restHandler) handlePutCell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	writeOK(w)
 }
 
 // DELETE /api/tables/{table}/rows/{rowKey}/columns/{column}
@@ -190,7 +208,7 @@ func (h *restHandler) handleDeleteCell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	writeOK(w)
 }
 
 // GET /api/tables/{table}/rows/{rowKey}[?column=a&column=b]
@@ -238,8 +256,7 @@ func (h *restHandler) handlePutRow(w http.ResponseWriter, r *http.Request) {
 	rowKey := r.PathValue("rowKey")
 
 	var row qte.Row
-	if err := json.NewDecoder(r.Body).Decode(&row); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json row body: "+err.Error())
+	if !readJSON(w, r, "row", &row, false) {
 		return
 	}
 
@@ -248,7 +265,7 @@ func (h *restHandler) handlePutRow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	writeOK(w)
 }
 
 // DELETE /api/tables/{table}/rows/{rowKey}
@@ -261,7 +278,7 @@ func (h *restHandler) handleDeleteRow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	writeOK(w)
 }
 
 // POST /api/tables/{table}/rows
@@ -269,8 +286,7 @@ func (h *restHandler) handleInsertRow(w http.ResponseWriter, r *http.Request) {
 	table := r.PathValue("table")
 
 	var row qte.Row
-	if err := json.NewDecoder(r.Body).Decode(&row); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json row body: "+err.Error())
+	if !readJSON(w, r, "row", &row, false) {
 		return
 	}
 
@@ -286,54 +302,47 @@ func (h *restHandler) handleInsertRow(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// QueryFilter selects the rows of a query or a delete by query.
-type QueryFilter struct {
-	Prefix    string          `json:"prefix,omitempty"`
-	StartKey  string          `json:"startKey,omitempty"`
-	EndKey    string          `json:"endKey,omitempty"`
-	OrderDesc bool            `json:"orderDesc,omitempty"`
-	Offset    int             `json:"offset,omitempty"`
-	Limit     int             `json:"limit,omitempty"`
-	Where     []PredicateIn   `json:"where,omitempty"`
-	Or        [][]PredicateIn `json:"or,omitempty"`
-}
-
-// QueryRequest defines query parameters for POST /api/tables/{table}/query
-type QueryRequest struct {
-	QueryFilter
-	SelectCols []string `json:"select,omitempty"`
-	CountOnly  bool     `json:"countOnly,omitempty"`
-	Aggregate  string   `json:"aggregate,omitempty"`
-}
-
-type PredicateIn struct {
-	Column string        `json:"column"`
-	Op     qte.CompareOp `json:"op"`
-	Value  any           `json:"value,omitempty"`
+// queryFilter selects the rows of a query or a delete by query.
+// Predicates decode into qte.Condition, whose fields match "column", "op" and "value".
+type queryFilter struct {
+	Prefix    string            `json:"prefix"`
+	StartKey  string            `json:"startKey"`
+	EndKey    string            `json:"endKey"`
+	OrderDesc bool              `json:"orderDesc"`
+	Offset    int               `json:"offset"`
+	Limit     int               `json:"limit"`
+	Where     []qte.Condition   `json:"where"`
+	Or        [][]qte.Condition `json:"or"`
 }
 
 // POST /api/tables/{table}/query
+type queryReq struct {
+	queryFilter
+	Select    []string `json:"select"`
+	CountOnly bool     `json:"countOnly"`
+	Aggregate string   `json:"aggregate"`
+}
+
 func (h *restHandler) handleQuery(w http.ResponseWriter, r *http.Request) {
 	table := r.PathValue("table")
 
-	var req QueryRequest
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json query body: "+err.Error())
-			return
-		}
+	// An empty body queries every row.
+	var req queryReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid json query body: "+err.Error())
+		return
 	}
 
 	if req.CountOnly && req.Aggregate != "" {
 		writeError(w, http.StatusBadRequest, "countOnly and aggregate cannot be combined")
 		return
 	}
-	qb, err := h.buildQuery(table, req.QueryFilter)
+	qb, err := h.buildQuery(table, req.queryFilter)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	qb.Select(req.SelectCols...)
+	qb.Select(req.Select...)
 
 	if req.Aggregate != "" {
 		stats, err := qb.Aggregate(req.Aggregate)
@@ -364,13 +373,9 @@ func (h *restHandler) handleQuery(w http.ResponseWriter, r *http.Request) {
 		writeQTEError(w, err)
 		return
 	}
-	if rows == nil {
-		rows = []qte.QueryRow{}
-	}
-
 	writeJSON(w, http.StatusOK, map[string]any{
 		"table": table,
-		"rows":  rows,
+		"rows":  orEmpty(rows),
 		"count": len(rows),
 	})
 }
@@ -380,11 +385,8 @@ func (h *restHandler) handleQueryDelete(w http.ResponseWriter, r *http.Request) 
 	table := r.PathValue("table")
 
 	// A body is required and unknown fields are rejected: a misspelled "where" must not delete every row.
-	var req QueryFilter
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json delete body: "+err.Error())
+	var req queryFilter
+	if !readJSON(w, r, "delete", &req, true) {
 		return
 	}
 
@@ -403,7 +405,7 @@ func (h *restHandler) handleQueryDelete(w http.ResponseWriter, r *http.Request) 
 
 // buildQuery applies a filter to a new query on table.
 // The predicate groups of "or" are alternatives, so they cannot be combined with "where".
-func (h *restHandler) buildQuery(table string, f QueryFilter) (*qte.QueryBuilder, error) {
+func (h *restHandler) buildQuery(table string, f queryFilter) (*qte.QueryBuilder, error) {
 	if len(f.Where) > 0 && len(f.Or) > 0 {
 		return nil, errors.New("where and or cannot be combined")
 	}
@@ -416,39 +418,35 @@ func (h *restHandler) buildQuery(table string, f QueryFilter) (*qte.QueryBuilder
 	if f.OrderDesc {
 		qb.OrderDesc()
 	}
-	for _, p := range f.Where {
-		qb.Where(p.Column, p.Op, p.Value)
+	for _, c := range f.Where {
+		qb.Where(c.Column, c.Op, c.Value)
 	}
 	for i, g := range f.Or {
 		if len(g) == 0 {
 			return nil, fmt.Errorf("or group %d is empty", i)
 		}
 		qb.Or()
-		for _, p := range g {
-			qb.Where(p.Column, p.Op, p.Value)
+		for _, c := range g {
+			qb.Where(c.Column, c.Op, c.Value)
 		}
 	}
 	return qb, nil
 }
 
-// BatchRequest models POST /api/tables/{table}/batch
-type BatchRequest struct {
+// POST /api/tables/{table}/batch
+type batchReq struct {
 	Action    string              `json:"action"` // "write", "get", "delete", "insert"
 	RowKeys   []string            `json:"rowKeys,omitempty"`
 	Mutations []qte.BatchMutation `json:"mutations,omitempty"`
 	Rows      []qte.Row           `json:"rows,omitempty"`
 }
 
-// POST /api/tables/{table}/batch
 func (h *restHandler) handleBatch(w http.ResponseWriter, r *http.Request) {
 	table := r.PathValue("table")
 
 	// Unknown fields are rejected: a misspelled "setCols" must not be silently dropped.
-	var req BatchRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json batch body: "+err.Error())
+	var req batchReq
+	if !readJSON(w, r, "batch", &req, true) {
 		return
 	}
 
@@ -458,7 +456,7 @@ func (h *restHandler) handleBatch(w http.ResponseWriter, r *http.Request) {
 			writeQTEError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		writeOK(w)
 	case "get":
 		rows, err := h.db.BatchGetRows(table, req.RowKeys)
 		if err != nil {
@@ -474,7 +472,7 @@ func (h *restHandler) handleBatch(w http.ResponseWriter, r *http.Request) {
 			writeQTEError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		writeOK(w)
 	case "insert":
 		keys, err := h.db.BatchInsert(table, req.Rows)
 		if err != nil {
@@ -501,8 +499,7 @@ func (h *restHandler) handleIncr(w http.ResponseWriter, r *http.Request) {
 	rowKey := r.PathValue("rowKey")
 
 	var req incrReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json incr body: "+err.Error())
+	if !readJSON(w, r, "incr", &req, false) {
 		return
 	}
 
@@ -531,8 +528,7 @@ func (h *restHandler) handleAppend(w http.ResponseWriter, r *http.Request) {
 	rowKey := r.PathValue("rowKey")
 
 	var req stringModReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json append body: "+err.Error())
+	if !readJSON(w, r, "append", &req, false) {
 		return
 	}
 
@@ -550,8 +546,7 @@ func (h *restHandler) handlePrepend(w http.ResponseWriter, r *http.Request) {
 	rowKey := r.PathValue("rowKey")
 
 	var req stringModReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json prepend body: "+err.Error())
+	if !readJSON(w, r, "prepend", &req, false) {
 		return
 	}
 
@@ -575,10 +570,7 @@ func (h *restHandler) handleCAS(w http.ResponseWriter, r *http.Request) {
 
 	// Unknown fields are rejected: a misspelled "condition" must not become an unconditional write.
 	var req casReq
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json cas body: "+err.Error())
+	if !readJSON(w, r, "cas", &req, true) {
 		return
 	}
 
@@ -587,7 +579,7 @@ func (h *restHandler) handleCAS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	writeOK(w)
 }
 
 // POST /api/tables/{table}/rows/{rowKey}/cad
@@ -602,10 +594,7 @@ func (h *restHandler) handleCAD(w http.ResponseWriter, r *http.Request) {
 
 	// Unknown fields are rejected: a misspelled "delCols" must not delete the whole row.
 	var req cadReq
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json cad body: "+err.Error())
+	if !readJSON(w, r, "cad", &req, true) {
 		return
 	}
 
@@ -614,5 +603,5 @@ func (h *restHandler) handleCAD(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	writeOK(w)
 }

@@ -18,7 +18,7 @@ import (
 )
 
 // MCP server version
-const mcpVersion = "0.2.0"
+const mcpVersion = "0.3.0"
 
 // MCPHandler integrates the MCP server into a standard http.ServeMux using SSE transport.
 type MCPHandler struct {
@@ -160,160 +160,161 @@ func (h *MCPHandler) Close() {
 
 // registerMCPTools defines all wide-column engine and query tools.
 func registerMCPTools(s *server.MCPServer, db *qte.DB) {
-	// 1. qte_get_cell
+	table := mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table"))
+	rowKey := mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key"))
+	column := mcp.WithString("column", mcp.Required(), mcp.Description("Column name"))
+	condition := mcp.WithObject("condition", mcp.Description(`{"column": name, "op": op, "value": v}; same operators as qte_query where`),
+		mcp.Properties(predicateProps()), mcp.AdditionalProperties(false))
+
 	s.AddTool(
 		mcp.NewTool("qte_get_cell",
 			mcp.WithDescription("Get a cell value from a wide-column table by table, rowKey, and column."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
-			mcp.WithString("column", mcp.Required(), mcp.Description("Column name")),
+			table, rowKey, column,
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			rowKey, _ := req.GetArguments()["rowKey"].(string)
-			col, _ := req.GetArguments()["column"].(string)
-
-			val, err := db.GetCell(table, rowKey, col)
+			args := req.GetArguments()
+			val, err := db.GetCell(str(args, "table"), str(args, "rowKey"), str(args, "column"))
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return errResult(err)
 			}
-			out, _ := json.Marshal(val)
-			return mcp.NewToolResultText(string(out)), nil
+			return jsonResult(val)
 		},
 	)
 
-	// 2. qte_set_cell
 	s.AddTool(
 		mcp.NewTool("qte_set_cell",
 			mcp.WithDescription("Set a cell scalar value in a wide-column table."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
-			mcp.WithString("column", mcp.Required(), mcp.Description("Column name")),
+			table, rowKey, column,
 			mcp.WithAny("value", mcp.Required(), mcp.Description("Scalar value: number, string or boolean")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			rowKey, _ := req.GetArguments()["rowKey"].(string)
-			col, _ := req.GetArguments()["column"].(string)
-			val := req.GetArguments()["value"]
-
-			if err := db.SetCell(table, rowKey, col, val); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			args := req.GetArguments()
+			if err := db.SetCell(str(args, "table"), str(args, "rowKey"), str(args, "column"), args["value"]); err != nil {
+				return errResult(err)
 			}
-			return mcp.NewToolResultText(`{"status":"ok"}`), nil
+			return okResult()
 		},
 	)
 
-	// 3. qte_delete_cell
 	s.AddTool(
 		mcp.NewTool("qte_delete_cell",
 			mcp.WithDescription("Delete a single cell from a row."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
-			mcp.WithString("column", mcp.Required(), mcp.Description("Column name")),
+			table, rowKey, column,
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			rowKey, _ := req.GetArguments()["rowKey"].(string)
-			col, _ := req.GetArguments()["column"].(string)
-
-			if err := db.DeleteCell(table, rowKey, col); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			args := req.GetArguments()
+			if err := db.DeleteCell(str(args, "table"), str(args, "rowKey"), str(args, "column")); err != nil {
+				return errResult(err)
 			}
-			return mcp.NewToolResultText(`{"status":"ok"}`), nil
+			return okResult()
 		},
 	)
 
-	// 4. qte_get_row
 	s.AddTool(
 		mcp.NewTool("qte_get_row",
 			mcp.WithDescription("Retrieve all columns for a row."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
+			table, rowKey,
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			rowKey, _ := req.GetArguments()["rowKey"].(string)
-
-			row, err := db.GetRow(table, rowKey)
+			args := req.GetArguments()
+			row, err := db.GetRow(str(args, "table"), str(args, "rowKey"))
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return errResult(err)
 			}
-			out, _ := json.Marshal(row)
-			return mcp.NewToolResultText(string(out)), nil
+			return jsonResult(row)
 		},
 	)
 
-	// 5. qte_set_row
+	s.AddTool(
+		mcp.NewTool("qte_get_cells",
+			mcp.WithDescription("Retrieve selected columns of a row. Missing columns are omitted from the result."),
+			table, rowKey,
+			mcp.WithArray("columns", mcp.Required(), mcp.WithStringItems(), mcp.Description("Column names")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.GetArguments()
+			cols, err := stringList(args["columns"], "columns")
+			if err != nil {
+				return errResult(err)
+			}
+			row, err := db.GetCells(str(args, "table"), str(args, "rowKey"), cols)
+			if err != nil {
+				return errResult(err)
+			}
+			return jsonResult(row)
+		},
+	)
+
+	s.AddTool(
+		mcp.NewTool("qte_row_exists",
+			mcp.WithDescription("Check whether a row holds any cell, without reading its values."),
+			table, rowKey,
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.GetArguments()
+			ok, err := db.RowExists(str(args, "table"), str(args, "rowKey"))
+			if err != nil {
+				return errResult(err)
+			}
+			return jsonResult(map[string]bool{"exists": ok})
+		},
+	)
+
 	s.AddTool(
 		mcp.NewTool("qte_set_row",
 			mcp.WithDescription("Set or overwrite multiple columns in a row."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
+			table, rowKey,
 			mcp.WithObject("columns", mcp.Required(), mcp.Description("Column name to scalar value pairs")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			rowKey, _ := req.GetArguments()["rowKey"].(string)
-			cols, ok := req.GetArguments()["columns"].(map[string]any)
+			args := req.GetArguments()
+			cols, ok := args["columns"].(map[string]any)
 			if !ok {
-				return mcp.NewToolResultError("columns must be an object of key/value pairs"), nil
+				return errResult(errors.New("columns must be an object of key/value pairs"))
 			}
-
-			if err := db.SetRow(table, rowKey, cols); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			if err := db.SetRow(str(args, "table"), str(args, "rowKey"), cols); err != nil {
+				return errResult(err)
 			}
-			return mcp.NewToolResultText(`{"status":"ok"}`), nil
+			return okResult()
 		},
 	)
 
-	// 6. qte_insert_row
 	s.AddTool(
 		mcp.NewTool("qte_insert_row",
 			mcp.WithDescription("Insert a new row with auto-generated 8-digit hex key."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
+			table,
 			mcp.WithObject("columns", mcp.Description("Column name to scalar value pairs")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			cols, ok := req.GetArguments()["columns"].(map[string]any)
-			if !ok {
-				cols = make(map[string]any)
-			}
-
-			rowKey, err := db.InsertRow(table, cols)
+			args := req.GetArguments()
+			cols, _ := args["columns"].(map[string]any)
+			key, err := db.InsertRow(str(args, "table"), cols)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return errResult(err)
 			}
-			res, _ := json.Marshal(map[string]string{"rowKey": rowKey})
-			return mcp.NewToolResultText(string(res)), nil
+			return jsonResult(map[string]string{"rowKey": key})
 		},
 	)
 
-	// 7. qte_delete_row
 	s.AddTool(
 		mcp.NewTool("qte_delete_row",
 			mcp.WithDescription("Delete an entire row and all its columns."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
+			table, rowKey,
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			rowKey, _ := req.GetArguments()["rowKey"].(string)
-
-			if err := db.DeleteRow(table, rowKey); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			args := req.GetArguments()
+			if err := db.DeleteRow(str(args, "table"), str(args, "rowKey")); err != nil {
+				return errResult(err)
 			}
-			return mcp.NewToolResultText(`{"status":"ok"}`), nil
+			return okResult()
 		},
 	)
 
-	// 8. qte_query
 	s.AddTool(
 		mcp.NewTool("qte_query", slices.Concat(
 			[]mcp.ToolOption{
 				mcp.WithDescription("Query, scan, filter and project rows in a table, or aggregate a numeric column over them."),
-				mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
+				table,
 			},
 			filterOpts(),
 			[]mcp.ToolOption{
@@ -326,255 +327,206 @@ func registerMCPTools(s *server.MCPServer, db *qte.DB) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			args := req.GetArguments()
 			countOnly, _ := args["countOnly"].(bool)
-			aggregate, _ := args["aggregate"].(string)
+			aggregate := str(args, "aggregate")
 			if countOnly && aggregate != "" {
-				return mcp.NewToolResultError("countOnly and aggregate cannot be combined"), nil
+				return errResult(errors.New("countOnly and aggregate cannot be combined"))
 			}
 
 			qb, err := buildQuery(db, args)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return errResult(err)
 			}
 			if raw, ok := args["select"]; ok {
 				cols, err := stringList(raw, "select")
 				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
+					return errResult(err)
 				}
 				qb.Select(cols...)
 			}
 
-			if aggregate != "" {
+			switch {
+			case aggregate != "":
 				stats, err := qb.Aggregate(aggregate)
 				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
+					return errResult(err)
 				}
-				res, _ := json.Marshal(stats)
-				return mcp.NewToolResultText(string(res)), nil
-			}
-
-			if countOnly {
-				cnt, err := qb.Count()
+				return jsonResult(stats)
+			case countOnly:
+				n, err := qb.Count()
 				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
+					return errResult(err)
 				}
-				res, _ := json.Marshal(map[string]int{"count": cnt})
-				return mcp.NewToolResultText(string(res)), nil
+				return jsonResult(map[string]int{"count": n})
 			}
-
 			rows, err := qb.Execute()
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return errResult(err)
 			}
-			if rows == nil {
-				rows = []qte.QueryRow{}
-			}
-			res, _ := json.Marshal(rows)
-			return mcp.NewToolResultText(string(res)), nil
+			return jsonResult(orEmpty(rows))
 		},
 	)
 
-	// 9. qte_incr_cell
+	s.AddTool(
+		mcp.NewTool("qte_delete_query", slices.Concat(
+			[]mcp.ToolOption{
+				mcp.WithDescription("Atomically delete every row matching a filter; offset and limit apply as in qte_query. " +
+					"Without any filter every row of the table is deleted. Irreversible. Unknown arguments are rejected."),
+				table,
+			},
+			filterOpts(),
+		)...),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.GetArguments()
+			if k := unknownKey(args, "table", "prefix", "startKey", "endKey", "orderDesc", "offset", "limit", "where", "or"); k != "" {
+				return errResult(fmt.Errorf("unknown argument %q", k))
+			}
+			qb, err := buildQuery(db, args)
+			if err != nil {
+				return errResult(err)
+			}
+			n, err := qb.Delete()
+			if err != nil {
+				return errResult(err)
+			}
+			return jsonResult(map[string]int{"deleted": n})
+		},
+	)
+
 	s.AddTool(
 		mcp.NewTool("qte_incr_cell",
 			mcp.WithDescription("Atomically increment a numeric cell value."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
-			mcp.WithString("column", mcp.Required(), mcp.Description("Column name")),
+			table, rowKey, column,
 			mcp.WithNumber("delta", mcp.Required(), mcp.Description("Numeric delta to add")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			rowKey, _ := req.GetArguments()["rowKey"].(string)
-			col, _ := req.GetArguments()["column"].(string)
-			delta, _ := req.GetArguments()["delta"].(float64)
-
-			newVal, err := db.Incr(table, rowKey, col, delta)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			args := req.GetArguments()
+			delta, ok := args["delta"].(float64)
+			if !ok {
+				return errResult(errors.New("delta must be numeric"))
 			}
-			res, _ := json.Marshal(map[string]any{"value": newVal})
-			return mcp.NewToolResultText(string(res)), nil
+			val, err := db.Incr(str(args, "table"), str(args, "rowKey"), str(args, "column"), delta)
+			if err != nil {
+				return errResult(err)
+			}
+			return jsonResult(map[string]any{"value": val})
 		},
 	)
 
-	// 10. qte_append_cell
 	s.AddTool(
 		mcp.NewTool("qte_append_cell",
 			mcp.WithDescription("Atomically append string to an existing cell value."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
-			mcp.WithString("column", mcp.Required(), mcp.Description("Column name")),
+			table, rowKey, column,
 			mcp.WithString("suffix", mcp.Required(), mcp.Description("String suffix to append")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			rowKey, _ := req.GetArguments()["rowKey"].(string)
-			col, _ := req.GetArguments()["column"].(string)
-			suffix, _ := req.GetArguments()["suffix"].(string)
-
-			newVal, err := db.AppendCell(table, rowKey, col, suffix)
+			args := req.GetArguments()
+			val, err := db.AppendCell(str(args, "table"), str(args, "rowKey"), str(args, "column"), str(args, "suffix"))
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return errResult(err)
 			}
-			res, _ := json.Marshal(map[string]any{"value": newVal})
-			return mcp.NewToolResultText(string(res)), nil
+			return jsonResult(map[string]any{"value": val})
 		},
 	)
 
-	// 11. qte_batch_get
-	s.AddTool(
-		mcp.NewTool("qte_batch_get",
-			mcp.WithDescription("Retrieve multiple rows by their keys."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithArray("rowKeys", mcp.Required(), mcp.WithStringItems(), mcp.Description("8-character hex row keys")),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			rawKeys, ok := req.GetArguments()["rowKeys"].([]any)
-			if !ok {
-				return mcp.NewToolResultError("rowKeys array required"), nil
-			}
-			keys := make([]string, 0, len(rawKeys))
-			for _, k := range rawKeys {
-				s, ok := k.(string)
-				if !ok {
-					return mcp.NewToolResultError("rowKeys must be strings"), nil
-				}
-				keys = append(keys, s)
-			}
-
-			rows, err := db.BatchGetRows(table, keys)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			res, _ := json.Marshal(rows)
-			return mcp.NewToolResultText(string(res)), nil
-		},
-	)
-
-	// 12. qte_list_tables
-	s.AddTool(
-		mcp.NewTool("qte_list_tables",
-			mcp.WithDescription("List the names of all tables in the database."),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			tables, err := db.ListTables()
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			if tables == nil {
-				tables = []string{}
-			}
-			res, _ := json.Marshal(tables)
-			return mcp.NewToolResultText(string(res)), nil
-		},
-	)
-
-	// 13. qte_drop_table
-	s.AddTool(
-		mcp.NewTool("qte_drop_table",
-			mcp.WithDescription("Permanently delete a table and all of its rows. Irreversible."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			if err := db.DropTable(table); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			return mcp.NewToolResultText(`{"status":"ok"}`), nil
-		},
-	)
-
-	// 14. qte_list_rows
-	s.AddTool(
-		mcp.NewTool("qte_list_rows",
-			mcp.WithDescription("List the keys of all rows in a table, sorted."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			rows, err := db.ListRows(table)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			if rows == nil {
-				rows = []string{}
-			}
-			res, _ := json.Marshal(rows)
-			return mcp.NewToolResultText(string(res)), nil
-		},
-	)
-
-	// 15. qte_prepend_cell
 	s.AddTool(
 		mcp.NewTool("qte_prepend_cell",
 			mcp.WithDescription("Atomically prepend a string to a string cell. Creates the cell if it does not exist."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
-			mcp.WithString("column", mcp.Required(), mcp.Description("Column name")),
+			table, rowKey, column,
 			mcp.WithString("prefix", mcp.Required(), mcp.Description("String to put in front")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			rowKey, _ := req.GetArguments()["rowKey"].(string)
-			col, _ := req.GetArguments()["column"].(string)
-			prefix, _ := req.GetArguments()["prefix"].(string)
-
-			newVal, err := db.PrependCell(table, rowKey, col, prefix)
+			args := req.GetArguments()
+			val, err := db.PrependCell(str(args, "table"), str(args, "rowKey"), str(args, "column"), str(args, "prefix"))
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return errResult(err)
 			}
-			res, _ := json.Marshal(map[string]any{"value": newVal})
-			return mcp.NewToolResultText(string(res)), nil
+			return jsonResult(map[string]any{"value": val})
 		},
 	)
 
-	// 16. qte_cas
 	s.AddTool(
 		mcp.NewTool("qte_cas",
 			mcp.WithDescription("Atomically check a condition on one column of a row and, if it holds, write columns. "+
 				"Without a condition the write is unconditional. Unknown keys are rejected."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
-			mcp.WithObject("condition", mcp.Description(`{"column": name, "op": op, "value": v}; same operators as qte_query where`),
-				mcp.Properties(predicateProps()), mcp.AdditionalProperties(false)),
+			table, rowKey, condition,
 			mcp.WithObject("setCols", mcp.Description("Column name to scalar value pairs to write")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			args := req.GetArguments()
 			if k := unknownKey(args, "table", "rowKey", "condition", "setCols"); k != "" {
-				return mcp.NewToolResultError(fmt.Sprintf("unknown argument %q", k)), nil
+				return errResult(fmt.Errorf("unknown argument %q", k))
 			}
-			table, _ := args["table"].(string)
-			rowKey, _ := args["rowKey"].(string)
-
 			cond, err := parseCondition(args)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return errResult(err)
 			}
-
 			var setCols qte.Row
 			if raw, ok := args["setCols"]; ok {
-				m, ok := raw.(map[string]any)
-				if !ok {
-					return mcp.NewToolResultError("setCols must be an object"), nil
+				if setCols, ok = raw.(map[string]any); !ok {
+					return errResult(errors.New("setCols must be an object"))
 				}
-				setCols = m
 			}
-
-			if err := db.CheckAndSet(table, rowKey, cond, setCols); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			if err := db.CheckAndSet(str(args, "table"), str(args, "rowKey"), cond, setCols); err != nil {
+				return errResult(err)
 			}
-			return mcp.NewToolResultText(`{"status":"ok"}`), nil
+			return okResult()
 		},
 	)
 
-	// 17. qte_batch_write
+	s.AddTool(
+		mcp.NewTool("qte_cad",
+			mcp.WithDescription("Atomically check a condition on one column of a row and, if it holds, delete columns, "+
+				"or the whole row if delCols is omitted. Without a condition the delete is unconditional. Unknown keys are rejected."),
+			table, rowKey, condition,
+			mcp.WithArray("delCols", mcp.WithStringItems(), mcp.Description("Columns to delete; the whole row if omitted")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.GetArguments()
+			if k := unknownKey(args, "table", "rowKey", "condition", "delCols"); k != "" {
+				return errResult(fmt.Errorf("unknown argument %q", k))
+			}
+			cond, err := parseCondition(args)
+			if err != nil {
+				return errResult(err)
+			}
+			var delCols []string
+			if raw, ok := args["delCols"]; ok {
+				if delCols, err = stringList(raw, "delCols"); err != nil {
+					return errResult(err)
+				}
+			}
+			if err := db.CheckAndDelete(str(args, "table"), str(args, "rowKey"), cond, delCols); err != nil {
+				return errResult(err)
+			}
+			return okResult()
+		},
+	)
+
+	s.AddTool(
+		mcp.NewTool("qte_batch_get",
+			mcp.WithDescription("Retrieve multiple rows by their keys."),
+			table,
+			mcp.WithArray("rowKeys", mcp.Required(), mcp.WithStringItems(), mcp.Description("8-character hex row keys")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := req.GetArguments()
+			keys, err := stringList(args["rowKeys"], "rowKeys")
+			if err != nil {
+				return errResult(err)
+			}
+			rows, err := db.BatchGetRows(str(args, "table"), keys)
+			if err != nil {
+				return errResult(err)
+			}
+			return jsonResult(rows)
+		},
+	)
+
 	s.AddTool(
 		mcp.NewTool("qte_batch_write",
 			mcp.WithDescription("Apply several row mutations atomically: all succeed or none do. "+
 				"Each mutation deletes the whole row, or deletes delCols and then sets setCols. Unknown keys are rejected."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
+			table,
 			mcp.WithArray("mutations", mcp.Required(), mcp.Description("Row mutations"),
 				mcp.Items(map[string]any{
 					"type": "object",
@@ -589,199 +541,134 @@ func registerMCPTools(s *server.MCPServer, db *qte.DB) {
 				})),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			raw, ok := req.GetArguments()["mutations"].([]any)
+			args := req.GetArguments()
+			raw, ok := args["mutations"].([]any)
 			if !ok {
-				return mcp.NewToolResultError("mutations array required"), nil
+				return errResult(errors.New("mutations array required"))
 			}
-
 			muts := make([]qte.BatchMutation, 0, len(raw))
 			for i, r := range raw {
-				m, ok := r.(map[string]any)
-				if !ok {
-					return mcp.NewToolResultError(fmt.Sprintf("mutation %d must be an object", i)), nil
-				}
-				if k := unknownKey(m, "rowKey", "setCols", "delCols", "delete"); k != "" {
-					return mcp.NewToolResultError(fmt.Sprintf("mutation %d: unknown key %q", i, k)), nil
-				}
-				mut, err := parseMutation(m)
+				mut, err := parseMutation(r)
 				if err != nil {
-					return mcp.NewToolResultError(fmt.Sprintf("mutation %d: %v", i, err)), nil
+					return errResult(fmt.Errorf("mutation %d: %w", i, err))
 				}
 				muts = append(muts, mut)
 			}
-
-			if err := db.BatchWrite(table, muts); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			if err := db.BatchWrite(str(args, "table"), muts); err != nil {
+				return errResult(err)
 			}
-			return mcp.NewToolResultText(`{"status":"ok"}`), nil
+			return okResult()
 		},
 	)
 
-	// 18. qte_batch_insert
 	s.AddTool(
 		mcp.NewTool("qte_batch_insert",
 			mcp.WithDescription("Insert several rows atomically, each under a new auto-generated 8-digit hex key. "+
 				"Returns the keys in the order of the rows."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
+			table,
 			mcp.WithArray("rows", mcp.Required(), mcp.Description("Rows to insert, each an object of column name to scalar value pairs"),
 				mcp.Items(map[string]any{"type": "object"})),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			raw, ok := req.GetArguments()["rows"].([]any)
+			args := req.GetArguments()
+			raw, ok := args["rows"].([]any)
 			if !ok {
-				return mcp.NewToolResultError("rows array required"), nil
+				return errResult(errors.New("rows array required"))
 			}
-
 			rows := make([]qte.Row, 0, len(raw))
 			for i, r := range raw {
 				m, ok := r.(map[string]any)
 				if !ok {
-					return mcp.NewToolResultError(fmt.Sprintf("row %d must be an object", i)), nil
+					return errResult(fmt.Errorf("row %d must be an object", i))
 				}
 				rows = append(rows, m)
 			}
-
-			keys, err := db.BatchInsert(table, rows)
+			keys, err := db.BatchInsert(str(args, "table"), rows)
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return errResult(err)
 			}
-			res, _ := json.Marshal(map[string]any{"rowKeys": keys})
-			return mcp.NewToolResultText(string(res)), nil
+			return jsonResult(map[string]any{"rowKeys": keys})
 		},
 	)
 
-	// 19. qte_get_cells
 	s.AddTool(
-		mcp.NewTool("qte_get_cells",
-			mcp.WithDescription("Retrieve selected columns of a row. Missing columns are omitted from the result."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
-			mcp.WithArray("columns", mcp.Required(), mcp.WithStringItems(), mcp.Description("Column names")),
+		mcp.NewTool("qte_list_tables",
+			mcp.WithDescription("List the names of all tables in the database."),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			rowKey, _ := req.GetArguments()["rowKey"].(string)
-			cols, err := stringList(req.GetArguments()["columns"], "columns")
+			tables, err := db.ListTables()
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return errResult(err)
 			}
-
-			row, err := db.GetCells(table, rowKey, cols)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			res, _ := json.Marshal(row)
-			return mcp.NewToolResultText(string(res)), nil
+			return jsonResult(orEmpty(tables))
 		},
 	)
 
-	// 20. qte_row_exists
 	s.AddTool(
-		mcp.NewTool("qte_row_exists",
-			mcp.WithDescription("Check whether a row holds any cell, without reading its values."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
+		mcp.NewTool("qte_drop_table",
+			mcp.WithDescription("Permanently delete a table and all of its rows. Irreversible."),
+			table,
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			rowKey, _ := req.GetArguments()["rowKey"].(string)
-
-			ok, err := db.RowExists(table, rowKey)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+			if err := db.DropTable(str(req.GetArguments(), "table")); err != nil {
+				return errResult(err)
 			}
-			res, _ := json.Marshal(map[string]bool{"exists": ok})
-			return mcp.NewToolResultText(string(res)), nil
+			return okResult()
 		},
 	)
 
-	// 21. qte_list_columns
+	s.AddTool(
+		mcp.NewTool("qte_list_rows",
+			mcp.WithDescription("List the keys of all rows in a table, sorted."),
+			table,
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			rows, err := db.ListRows(str(req.GetArguments(), "table"))
+			if err != nil {
+				return errResult(err)
+			}
+			return jsonResult(orEmpty(rows))
+		},
+	)
+
 	s.AddTool(
 		mcp.NewTool("qte_list_columns",
 			mcp.WithDescription("List the distinct column names used in a table, sorted. Scans every key of the table."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
+			table,
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			table, _ := req.GetArguments()["table"].(string)
-			cols, err := db.ListColumns(table)
+			cols, err := db.ListColumns(str(req.GetArguments(), "table"))
 			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
+				return errResult(err)
 			}
-			if cols == nil {
-				cols = []string{}
-			}
-			res, _ := json.Marshal(cols)
-			return mcp.NewToolResultText(string(res)), nil
+			return jsonResult(orEmpty(cols))
 		},
 	)
+}
 
-	// 22. qte_cad
-	s.AddTool(
-		mcp.NewTool("qte_cad",
-			mcp.WithDescription("Atomically check a condition on one column of a row and, if it holds, delete columns, "+
-				"or the whole row if delCols is omitted. Without a condition the delete is unconditional. Unknown keys are rejected."),
-			mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			mcp.WithString("rowKey", mcp.Required(), mcp.Description("8-character hex row key")),
-			mcp.WithObject("condition", mcp.Description(`{"column": name, "op": op, "value": v}; same operators as qte_query where`),
-				mcp.Properties(predicateProps()), mcp.AdditionalProperties(false)),
-			mcp.WithArray("delCols", mcp.WithStringItems(), mcp.Description("Columns to delete; the whole row if omitted")),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			args := req.GetArguments()
-			if k := unknownKey(args, "table", "rowKey", "condition", "delCols"); k != "" {
-				return mcp.NewToolResultError(fmt.Sprintf("unknown argument %q", k)), nil
-			}
-			table, _ := args["table"].(string)
-			rowKey, _ := args["rowKey"].(string)
+// jsonResult returns v as a JSON-encoded text result.
+func jsonResult(v any) (*mcp.CallToolResult, error) {
+	out, err := json.Marshal(v)
+	if err != nil {
+		return errResult(err)
+	}
+	return mcp.NewToolResultText(string(out)), nil
+}
 
-			cond, err := parseCondition(args)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			var delCols []string
-			if raw, ok := args["delCols"]; ok {
-				if delCols, err = stringList(raw, "delCols"); err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
-				}
-			}
+// errResult reports err as a failed tool result, not a protocol error.
+func errResult(err error) (*mcp.CallToolResult, error) {
+	return mcp.NewToolResultError(err.Error()), nil
+}
 
-			if err := db.CheckAndDelete(table, rowKey, cond, delCols); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			return mcp.NewToolResultText(`{"status":"ok"}`), nil
-		},
-	)
+func okResult() (*mcp.CallToolResult, error) {
+	return mcp.NewToolResultText(`{"status":"ok"}`), nil
+}
 
-	// 23. qte_delete_query
-	s.AddTool(
-		mcp.NewTool("qte_delete_query", slices.Concat(
-			[]mcp.ToolOption{
-				mcp.WithDescription("Atomically delete every row matching a filter; offset and limit apply as in qte_query. " +
-					"Without any filter every row of the table is deleted. Irreversible. Unknown arguments are rejected."),
-				mcp.WithString("table", mcp.Required(), mcp.Description("Name of the table")),
-			},
-			filterOpts(),
-		)...),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			args := req.GetArguments()
-			if k := unknownKey(args, "table", "prefix", "startKey", "endKey", "orderDesc", "offset", "limit", "where", "or"); k != "" {
-				return mcp.NewToolResultError(fmt.Sprintf("unknown argument %q", k)), nil
-			}
-
-			qb, err := buildQuery(db, args)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			n, err := qb.Delete()
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			res, _ := json.Marshal(map[string]int{"deleted": n})
-			return mcp.NewToolResultText(string(res)), nil
-		},
-	)
+// str returns the string argument key, or "" if it is missing or not a string;
+// the engine then rejects the empty name.
+func str(args map[string]any, key string) string {
+	s, _ := args[key].(string)
+	return s
 }
 
 // filterOpts are the row selection parameters shared by qte_query and qte_delete_query.
@@ -807,19 +694,26 @@ func filterOpts() []mcp.ToolOption {
 	}
 }
 
+// predicateProps is the JSON schema of a {column, op, value} predicate's fields.
+func predicateProps() map[string]any {
+	return map[string]any{
+		"column": map[string]any{"type": "string"},
+		"op": map[string]any{"type": "string", "enum": []string{
+			"=", "!=", ">", ">=", "<", "<=", "CONTAINS", "PREFIX", "EXISTS", "MISSING",
+		}},
+		"value": map[string]any{},
+	}
+}
+
 // buildQuery applies the filter arguments of qte_query and qte_delete_query to a new query.
 func buildQuery(db *qte.DB, args map[string]any) (*qte.QueryBuilder, error) {
-	table, _ := args["table"].(string)
-	prefix, _ := args["prefix"].(string)
-	startKey, _ := args["startKey"].(string)
-	endKey, _ := args["endKey"].(string)
 	orderDesc, _ := args["orderDesc"].(bool)
 	offset, _ := args["offset"].(float64)
 	limit, _ := args["limit"].(float64)
 
-	qb := db.Query(table).
-		WithPrefix(prefix).
-		WithKeyRange(startKey, endKey).
+	qb := db.Query(str(args, "table")).
+		WithPrefix(str(args, "prefix")).
+		WithKeyRange(str(args, "startKey"), str(args, "endKey")).
 		Offset(int(offset)).
 		Limit(int(limit))
 	if orderDesc {
@@ -874,9 +768,7 @@ func parsePredicates(raw any) ([]qte.Condition, error) {
 		if !ok {
 			return nil, errors.New("each where predicate must be an object")
 		}
-		col, _ := m["column"].(string)
-		op, _ := m["op"].(string)
-		conds = append(conds, qte.Condition{Column: col, Op: qte.CompareOp(op), Value: m["value"]})
+		conds = append(conds, qte.Condition{Column: str(m, "column"), Op: qte.CompareOp(str(m, "op")), Value: m["value"]})
 	}
 	return conds, nil
 }
@@ -894,9 +786,41 @@ func parseCondition(args map[string]any) (*qte.Condition, error) {
 	if k := unknownKey(m, "column", "op", "value"); k != "" {
 		return nil, fmt.Errorf("unknown condition key %q", k)
 	}
-	col, _ := m["column"].(string)
-	op, _ := m["op"].(string)
-	return &qte.Condition{Column: col, Op: qte.CompareOp(op), Value: m["value"]}, nil
+	return &qte.Condition{Column: str(m, "column"), Op: qte.CompareOp(str(m, "op")), Value: m["value"]}, nil
+}
+
+// parseMutation converts one decoded JSON mutation object into a BatchMutation, rejecting unknown keys.
+func parseMutation(raw any) (qte.BatchMutation, error) {
+	var mut qte.BatchMutation
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return mut, errors.New("must be an object")
+	}
+	if k := unknownKey(m, "rowKey", "setCols", "delCols", "delete"); k != "" {
+		return mut, fmt.Errorf("unknown key %q", k)
+	}
+
+	if mut.RowKey, ok = m["rowKey"].(string); !ok {
+		return mut, errors.New("rowKey must be a string")
+	}
+	if raw, present := m["setCols"]; present {
+		if mut.SetCols, ok = raw.(map[string]any); !ok {
+			return mut, errors.New("setCols must be an object")
+		}
+	}
+	if raw, present := m["delCols"]; present {
+		cols, err := stringList(raw, "delCols")
+		if err != nil {
+			return mut, err
+		}
+		mut.DelCols = cols
+	}
+	if raw, present := m["delete"]; present {
+		if mut.Delete, ok = raw.(bool); !ok {
+			return mut, errors.New("delete must be a boolean")
+		}
+	}
+	return mut, nil
 }
 
 // stringList converts a decoded JSON array of strings; name labels the error.
@@ -916,17 +840,6 @@ func stringList(raw any, name string) ([]string, error) {
 	return list, nil
 }
 
-// predicateProps is the JSON schema of a {column, op, value} predicate's fields.
-func predicateProps() map[string]any {
-	return map[string]any{
-		"column": map[string]any{"type": "string"},
-		"op": map[string]any{"type": "string", "enum": []string{
-			"=", "!=", ">", ">=", "<", "<=", "CONTAINS", "PREFIX", "EXISTS", "MISSING",
-		}},
-		"value": map[string]any{},
-	}
-}
-
 // unknownKey returns a key of m that is not in allowed, or "" if there is none.
 // Misspelled keys must fail rather than be ignored, or a write could lose its condition.
 func unknownKey(m map[string]any, allowed ...string) string {
@@ -936,38 +849,4 @@ func unknownKey(m map[string]any, allowed ...string) string {
 		}
 	}
 	return ""
-}
-
-// parseMutation converts one decoded JSON mutation object into a BatchMutation.
-func parseMutation(m map[string]any) (qte.BatchMutation, error) {
-	var mut qte.BatchMutation
-	var ok bool
-
-	if mut.RowKey, ok = m["rowKey"].(string); !ok {
-		return mut, errors.New("rowKey must be a string")
-	}
-	if raw, present := m["setCols"]; present {
-		if mut.SetCols, ok = raw.(map[string]any); !ok {
-			return mut, errors.New("setCols must be an object")
-		}
-	}
-	if raw, present := m["delCols"]; present {
-		cols, ok := raw.([]any)
-		if !ok {
-			return mut, errors.New("delCols must be an array of column names")
-		}
-		for _, c := range cols {
-			s, ok := c.(string)
-			if !ok {
-				return mut, errors.New("delCols must be an array of column names")
-			}
-			mut.DelCols = append(mut.DelCols, s)
-		}
-	}
-	if raw, present := m["delete"]; present {
-		if mut.Delete, ok = raw.(bool); !ok {
-			return mut, errors.New("delete must be a boolean")
-		}
-	}
-	return mut, nil
 }

@@ -220,9 +220,9 @@ A predicate is `{"column": "age", "op": ">=", "value": 18}`. The operators are t
 
 ### `qte_incr_cell`
 
-Atomically increment a numeric cell. The cell is initialised to zero if it does not exist.
+Atomically increment a numeric cell. A cell that does not exist counts as zero.
 
-**Parameters** — `table`, `rowKey`, `column` (all required), `delta` (number, required)
+**Parameters** — `table`, `rowKey`, `column` (all required), `delta` (number, required); a `delta` that is not a number is an error
 
 **Result**
 
@@ -266,7 +266,7 @@ Retrieve multiple rows by their keys in one round-trip.
 
 **Parameters** — `table`, `rowKeys` (string array) (both required)
 
-**Result** — map of rowKey → columns
+**Result** — map of rowKey → columns; rows that do not exist are left out
 
 ```json
 {
@@ -579,9 +579,11 @@ Tool errors are returned as MCP tool results with `isError: true`. The text cont
 | `column name must be non-empty and contain no whitespace` | Bad column argument |
 | `value must be a scalar (...)` | Unsupported value type |
 | `cell value is not numeric` | Increment on a non-numeric cell |
+| `delta must be numeric` | `qte_incr_cell` with a `delta` that is not a number |
 | `cell value is not a string` | Append/prepend on wrong type |
-| `unknown comparison operator: ...` | Bad `op` in a `where` predicate or `cas` condition |
+| `unknown comparison operator: ...` | Bad `op` in a `where` or `or` predicate, or in a `qte_cas` / `qte_cad` condition |
 | `unknown argument ...`, `unknown condition key ...`, `mutation N: ...` | Misspelled or malformed `qte_cas` / `qte_cad` / `qte_batch_write` / `qte_delete_query` input |
+| `... must be an array of strings`, `... must be an object`, `... array required` | An argument of the wrong JSON type |
 | `where and or cannot be combined`, `or group N is empty` | Malformed `qte_query` / `qte_delete_query` filter |
 | `countOnly and aggregate cannot be combined` | Conflicting `qte_query` output options |
 | `check and put condition failed` | CAS or CAD condition not satisfied |

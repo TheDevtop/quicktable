@@ -1,6 +1,6 @@
 # Quicktable REST API
 
-All endpoints except [`/health`](#health) are under `/api/tables`. Every response body is JSON with `Content-Type: application/json`.
+All endpoints except [`/health`](#health) are under `/api/tables`. Every response body is JSON with `Content-Type: application/json`, except for [`HEAD`](#check-a-row-exists), which has no body.
 
 **Row keys** are 8-character hexadecimal strings (e.g. `"a3f10c2b"`). Either case is accepted; keys are stored and listed in lowercase. The engine auto-generates one when you insert a row.
 
@@ -18,7 +18,7 @@ All errors return a JSON body with a single `"error"` key.
 
 | HTTP status | Cause |
 |-------------|-------|
-| 400 Bad Request | Invalid table name, row key, column name or operator, unsupported value type, wrong cell type for `incr`/`append`/`prepend`, or malformed JSON |
+| 400 Bad Request | Invalid table name, row key, column name or operator, unsupported value type, wrong cell type for `incr`/`append`/`prepend`, conflicting query fields, or malformed JSON |
 | 404 Not Found | Row or column does not exist |
 | 409 Conflict | A `cas` or `cad` condition check failed |
 | 500 Internal Server Error | Unexpected storage error |
@@ -232,7 +232,7 @@ Checks whether the row holds any cell, without reading its values. There is no r
 PUT /api/tables/{table}/rows/{rowKey}
 ```
 
-Writes the given columns to an existing row (merge, not replace). Columns not mentioned are left untouched.
+Writes the given columns to the row (merge, not replace), creating the row if it does not exist. Columns not mentioned are left untouched. An empty object `{}` writes nothing.
 
 **Body** — a plain JSON object of column → value pairs:
 
@@ -301,7 +301,7 @@ Removes the row and all its columns.
 POST /api/tables/{table}/query
 ```
 
-Scan, filter, and project rows. Send an empty body or omit `Content-Length` to return all rows.
+Scan, filter, and project rows. Send an empty body to return all rows. Unknown fields are ignored.
 
 **Body fields** (all optional)
 
@@ -459,7 +459,7 @@ Multi-row read, write, delete, or insert in a single request. Unknown fields in 
 
 ### Batch get
 
-Retrieve multiple rows by their keys.
+Retrieve multiple rows by their keys. Rows that do not exist are left out of `rows`.
 
 ```json
 {
@@ -525,7 +525,7 @@ Apply multiple row mutations atomically in one transaction.
 
 ### Batch delete
 
-Delete multiple rows.
+Delete multiple rows in one transaction. Keys of rows that do not exist are not an error.
 
 ```json
 {
@@ -569,7 +569,7 @@ Insert multiple rows atomically, each under a new auto-generated key that is not
 
 ## Atomic cell operations
 
-All atomic operations return the new value after the operation.
+Increment, append and prepend return the new value of the cell. Check-and-set and check-and-delete return `{"status":"ok"}`.
 
 ### Increment
 
@@ -577,7 +577,7 @@ All atomic operations return the new value after the operation.
 POST /api/tables/{table}/rows/{rowKey}/incr
 ```
 
-Atomically adds `delta` to a numeric cell. The cell is created at zero if it does not exist.
+Atomically adds `delta` to a numeric cell. A cell that does not exist counts as zero. A `delta` that is not a JSON number is rejected with **400**.
 
 **Body**
 
