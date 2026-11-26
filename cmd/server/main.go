@@ -4,25 +4,30 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/charmbracelet/log"
 	"github.com/dgraph-io/badger/v4"
 
 	"github.com/TheDevtop/quicktable/internal/mustang"
 )
 
-// charmLogger adds Warningf to Charm's logger so it also serves as a badger.Logger.
-type charmLogger struct {
-	*log.Logger
-}
+// badgerLogger routes Badger's printf-style logging to the default slog logger.
+type badgerLogger struct{}
 
-func (l charmLogger) Warningf(format string, args ...any) {
-	l.Warnf(format, args...)
+func (badgerLogger) Errorf(format string, args ...any)   { slog.Error(msg(format, args)) }
+func (badgerLogger) Warningf(format string, args ...any) { slog.Warn(msg(format, args)) }
+func (badgerLogger) Infof(format string, args ...any)    { slog.Info(msg(format, args)) }
+func (badgerLogger) Debugf(format string, args ...any)   { slog.Debug(msg(format, args)) }
+
+func msg(format string, args []any) string {
+	return strings.TrimRight(fmt.Sprintf(format, args...), "\n")
 }
 
 func main() {
@@ -42,36 +47,33 @@ func run() error {
 	flag.Parse()
 
 	// 1. Setup one logger for the server and Badger
-	logger := charmLogger{log.NewWithOptions(os.Stderr, log.Options{
-		ReportTimestamp: true,
-		TimeFormat:      "2006-01-02 15:04:05",
-	})}
-	logger.SetLevel(log.InfoLevel)
+	level := slog.LevelInfo
 	if *debug {
-		logger.SetLevel(log.DebugLevel)
+		level = slog.LevelDebug
 	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
 	if *token == "" {
-		logger.Warn("bearer token not set, this is insecure")
+		slog.Warn("bearer token not set, this is insecure")
 	}
 
-	logger.Info("starting quicktable server", "addr", *addr, "inMemory", *inMemory, "dir", *dataDir)
+	slog.Info("starting quicktable server", "addr", *addr, "inMemory", *inMemory, "dir", *dataDir)
 
-	// 2. Open the Mustang store with the same logger instance
+	// 2. Open the Mustang store, logging through slog
 	opt := badger.DefaultOptions(*dataDir)
 	if *inMemory {
 		opt = badger.DefaultOptions("").WithInMemory(true)
 	}
-	s, err := mustang.Open(opt.WithLogger(logger))
+	s, err := mustang.Open(opt.WithLogger(badgerLogger{}))
 	if err != nil {
-		logger.Error("failed to open mustang store", "err", err)
+		slog.Error("failed to open mustang store", "err", err)
 		return err
 	}
 	defer func() {
 		if err := s.Close(); err != nil {
-			logger.Error("error closing database", "err", err)
+			slog.Error("error closing database", "err", err)
 		} else {
-			logger.Info("database closed cleanly")
+			slog.Info("database closed cleanly")
 		}
 	}()
 
@@ -91,7 +93,7 @@ func run() error {
 	// 4. Start HTTP Server in background
 	serverErrCh := make(chan error, 1)
 	go func() {
-		logger.Info("HTTP server listening", "addr", *addr)
+		slog.Info("HTTP server listening", "addr", *addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErrCh <- err
 		}
@@ -104,18 +106,18 @@ func run() error {
 	var serveErr error
 	select {
 	case sig := <-sigCh:
-		logger.Info("shutdown signal received", "signal", sig.String())
+		slog.Info("shutdown signal received", "signal", sig.String())
 	case serveErr = <-serverErrCh:
-		logger.Error("server error", "err", serveErr)
+		slog.Error("server error", "err", serveErr)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		logger.Error("server shutdown forced", "err", err)
+		slog.Error("server shutdown forced", "err", err)
 	} else {
-		logger.Info("server exited gracefully")
+		slog.Info("server exited gracefully")
 	}
 	return serveErr
 }
