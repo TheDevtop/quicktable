@@ -17,6 +17,9 @@ import (
 	"github.com/TheDevtop/quicktable/pkg/qte"
 )
 
+// MCP server version
+const mcpVersion = "0.2.0"
+
 // MCPHandler integrates the MCP server into a standard http.ServeMux using SSE transport.
 type MCPHandler struct {
 	mcpServer *server.MCPServer
@@ -56,7 +59,7 @@ func (c *sseClient) stop() {
 //	GET  /mcp/sse     - SSE stream endpoint for clients
 //	POST /mcp/message - JSON-RPC message endpoint
 func RegisterMCPRoutes(mux *http.ServeMux, db *qte.DB) *MCPHandler {
-	s := server.NewMCPServer("quicktable-mcp", "0.1.0")
+	s := server.NewMCPServer("quicktable-mcp", mcpVersion)
 	registerMCPTools(s, db)
 
 	h := &MCPHandler{
