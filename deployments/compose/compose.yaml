@@ -2,7 +2,7 @@ name: quicktable
 services:
   table:
     image: ghcr.io/thedevtop/quicktable:latest
-    command: ["/usr/local/bin/quicktable", "-t", "SECRET-TOKEN-HERE"]
+    command: ["-t", "SECRET-TOKEN-HERE"]
     pull_policy: always
     volumes:
       - quicktable_data:/data
