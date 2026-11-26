@@ -35,13 +35,11 @@ var (
 const keySeparator byte = 0x00
 
 // Scalar Type Tags for binary serialization
+// The values are because of legacy compatibility
 const (
-	tagInt64   byte = 0x01
-	tagUint64  byte = 0x02
 	tagFloat64 byte = 0x03
 	tagBool    byte = 0x04
 	tagString  byte = 0x05
-	tagBytes   byte = 0x06
 )
 
 // Row represents a mapping of Column names to their scalar Values for a single RowKey.
@@ -240,19 +238,11 @@ func decodeValue(raw []byte) (any, error) {
 	payload := raw[1:]
 
 	switch tag {
-	// Integer tags are only read: older versions stored them, all numbers are now float64.
-	case tagInt64, tagUint64, tagFloat64:
+	case tagFloat64:
 		if len(payload) != 8 {
 			return nil, fmt.Errorf("%w: invalid number length", ErrCorruptData)
 		}
-		n := binary.BigEndian.Uint64(payload)
-		switch tag {
-		case tagInt64:
-			return float64(int64(n)), nil
-		case tagUint64:
-			return float64(n), nil
-		}
-		return math.Float64frombits(n), nil
+		return math.Float64frombits(binary.BigEndian.Uint64(payload)), nil
 
 	case tagBool:
 		if len(payload) != 1 {
@@ -260,8 +250,7 @@ func decodeValue(raw []byte) (any, error) {
 		}
 		return payload[0] != 0, nil
 
-	// Byte cells are only read: older versions stored them, all text is now string.
-	case tagString, tagBytes:
+	case tagString:
 		return string(payload), nil
 
 	default:
