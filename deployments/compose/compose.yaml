@@ -1,12 +1,18 @@
+name: quicktable
 services:
-  quicktable:
+  table:
     image: ghcr.io/thedevtop/quicktable:latest
+    command: ["/usr/local/bin/quicktable", "-t", "SECRET-TOKEN-HERE"]
     pull_policy: always
-    restart: unless-stopped
-    ports:
-      - "16000:16000"
     volumes:
-      - qt_data:/data
+      - quicktable_data:/data
+    restart: always
+  view:
+    image: ghcr.io/thedevtop/quickview:latest
+    pull_policy: always
+    environment:
+      - QUICKTABLE_URL=http://table:16000
+    restart: always
 
 volumes:
-  qt_data:
+  quicktable_data:
