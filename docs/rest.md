@@ -1,36 +1,54 @@
 # Quicktable REST API
 
-All endpoints except [`/health`](#health) are under `/api/tables`. Every response body is JSON with `Content-Type: application/json`, except for [`HEAD`](#check-a-row-exists), which has no body.
+The server stores cells addressed by **table**, **row** and **column**, and offers six operations. Each one is served at `POST /api/<name>` with a JSON body, and as an [MCP tool](mcp.md) with the same arguments and results:
 
-**Authentication:** every request except [`GET /health`](#health) must carry the server's token (set with the server's `-t` flag) as a bearer token:
+| Endpoint | Purpose |
+|----------|---------|
+| [`POST /api/scan`](#scan) | List tables, the rows of a table, or the columns of a table |
+| [`POST /api/get`](#get) | Read a table, a row, a column or one value |
+| [`POST /api/values`](#values) | Read many cells from one snapshot |
+| [`POST /api/query`](#query) | Filter rows, or count, sum, average, min or max them |
+| [`POST /api/batch`](#batch) | Write, delete and check cells atomically |
+| [`POST /api/incr`](#incr) | Atomically add to a number and return the result |
+
+[`GET /health`](#health) is the only other endpoint. Every response body is JSON.
+
+**Authentication:** every request except `GET /health` must carry the server's token (set with the server's `-t` flag) as a bearer token:
 
 ```
 Authorization: Bearer <token>
 ```
 
-A request with a missing, malformed or wrong token is rejected with **401 Unauthorized** and a `WWW-Authenticate: Bearer` header, before anything else is checked. The error never repeats the token that was sent.
+A request with a missing, malformed or wrong token is rejected with **401 Unauthorized** and a `WWW-Authenticate: Bearer` header before anything else is checked. The error never repeats the token that was sent.
 
-**Row keys** are 8-character hexadecimal strings (e.g. `"a3f10c2b"`). Either case is accepted; keys are stored and listed in lowercase. The engine auto-generates one when you insert a row.
+**Request bodies:** unknown fields are rejected with **400**, so a misspelled `row` cannot turn a row delete into a table drop. An empty body counts as `{}`.
 
-**Cell values** must be a JSON number, string or boolean. Numbers are stored as 64-bit floats, so integers above 2^53 lose precision. `null`, arrays and objects are rejected.
+**Names:** table names, row keys and column names are any non-empty string without whitespace or NUL bytes. There is no fixed key format, and the server does not generate keys.
+
+**Values:** a cell holds a JSON number, string or boolean. Numbers are stored as 64-bit floats, so integers above 2^53 lose precision. `null`, arrays and objects are rejected with **400**. Cells written by other clients, such as the qt shell, can also hold timestamps. These are returned as RFC 3339 strings in UTC, but a JSON string you send is always stored as a string.
+
+A table, row or column is not stored on its own. It exists only while it holds at least one cell, so deleting its last cell removes it.
 
 ---
 
-## Error responses
+## Errors
 
-All errors return a JSON body with a single `"error"` key.
+Errors return a JSON body with a single `"error"` key:
 
 ```json
-{ "error": "row not found" }
+{ "error": "mustang: not found" }
 ```
 
 | HTTP status | Cause |
 |-------------|-------|
-| 400 Bad Request | Invalid table name, row key, column name or operator, unsupported value type, wrong cell type for `incr`/`append`/`prepend`, conflicting query fields, or malformed JSON |
-| 401 Unauthorized | Missing or invalid bearer token: `{ "error": "missing or invalid bearer token" }` |
-| 404 Not Found | Row or column does not exist |
-| 409 Conflict | A `cas` or `cad` condition check failed |
+| 400 Bad Request | Malformed JSON, unknown field, invalid name, unsupported value type, unknown `cmp`, `op` or `agg`, or a cell of the wrong type for `incr`, `sum` or `avg` |
+| 401 Unauthorized | Missing or invalid bearer token |
+| 404 Not Found | The table, row, column or cell being read does not exist |
+| 409 Conflict | A batch `if` check failed, or a concurrent write to the same cells conflicted. Nothing was written. A conflict can be retried |
+| 413 Request Entity Too Large | The batch does not fit in one transaction. Nothing was written |
 | 500 Internal Server Error | Unexpected storage error |
+
+Any other method on an `/api/` path returns **405 Method Not Allowed**.
 
 ---
 
@@ -40,9 +58,7 @@ All errors return a JSON body with a single `"error"` key.
 GET /health
 ```
 
-Returns `200` whenever the server is accepting requests. Use it for liveness and readiness probes. This is the only endpoint that needs no token.
-
-**Response 200**
+Returns `200` whenever the server is accepting requests. Use it for liveness and readiness probes. It needs no token.
 
 ```json
 { "status": "ok" }
@@ -50,256 +66,92 @@ Returns `200` whenever the server is accepting requests. Use it for liveness and
 
 ---
 
-## Table operations
-
-### List tables
+## Scan
 
 ```
-GET /api/tables
+POST /api/scan
 ```
 
-Returns the names of all tables, sorted.
+Lists names. The fields given decide what is listed:
 
-> **Note:** Tables are not created or stored separately. A table exists only while it holds at least one cell, so it appears here after its first write and disappears once its last row or cell is deleted.
+| Body | Lists |
+|------|-------|
+| `{}` | All table names, sorted |
+| `{"table": "users"}` | The row keys of `users`, sorted |
+| `{"table": "users", "columns": true}` | The column names used in `users` |
+
+Column names come in the order they are first seen when walking the table by row key, not sorted. Listing columns reads every key of the table, so it gets slower as the table grows. `columns` without `table` is rejected with **400**.
+
+A table that does not exist gives an empty list, not an error.
 
 **Response 200**
 
 ```json
-{ "tables": ["orders", "users"] }
+{ "names": ["alice", "bob"] }
 ```
 
 ---
 
-### Drop a table
+## Get
 
 ```
-DELETE /api/tables/{table}
+POST /api/get
 ```
 
-Permanently removes the table and all of its rows. This cannot be undone.
+Reads part of one table. Which of `row` and `column` are given decides the scope, and the key of the response says what came back:
 
-> **Note:** Dropping a table that does not exist is not an error. It returns `200` with `{"status":"ok"}` and does nothing, so you can't use this endpoint to check whether a table existed.
+| Body | Response |
+|------|----------|
+| `{"table": "users"}` | `{"table": {rowKey: {column: value}}}`, the whole table |
+| `{"table": "users", "row": "alice"}` | `{"row": {column: value}}`, one row |
+| `{"table": "users", "column": "age"}` | `{"column": {rowKey: value}}`, one column across the rows that have it |
+| `{"table": "users", "row": "alice", "column": "age"}` | `{"value": value}`, one cell |
 
-**Response 200**
+If nothing is found, the response is **404**.
+
+**Examples**
 
 ```json
-{ "status": "ok" }
+{ "table": "users", "row": "alice" }
+```
+
+```json
+{ "row": { "age": 30, "email": "alice@example.com" } }
+```
+
+```json
+{ "table": "users", "column": "age" }
+```
+
+```json
+{ "column": { "alice": 30, "bob": 25 } }
 ```
 
 ---
 
-### List columns
+## Values
 
 ```
-GET /api/tables/{table}/columns
+POST /api/values
 ```
 
-Returns the distinct column names used by any row of the table, sorted. This scans every key of the table, so it gets slower as the table grows.
-
-> **Note:** Listing a table that does not exist is not an error. It returns `200` with an empty list.
-
-**Response 200**
-
-```json
-{ "columns": ["active", "age", "email"] }
-```
-
----
-
-## Cell operations
-
-### Get a cell
-
-```
-GET /api/tables/{table}/rows/{rowKey}/columns/{column}
-```
-
-Returns the value stored at a single column.
-
-**Response 200**
-
-```json
-{
-  "table": "users",
-  "rowKey": "a3f10c2b",
-  "column": "email",
-  "value": "alice@example.com"
-}
-```
-
----
-
-### Set a cell
-
-```
-PUT /api/tables/{table}/rows/{rowKey}/columns/{column}
-```
-
-**Body**
-
-```json
-{ "value": "alice@example.com" }
-```
-
-The `value` field accepts any scalar. Creates the row or column if it does not exist.
-
-**Response 200**
-
-```json
-{ "status": "ok" }
-```
-
----
-
-### Delete a cell
-
-```
-DELETE /api/tables/{table}/rows/{rowKey}/columns/{column}
-```
-
-Removes a single column from the row. The row itself is kept.
-
-**Response 200**
-
-```json
-{ "status": "ok" }
-```
-
----
-
-## Row operations
-
-### List rows
-
-```
-GET /api/tables/{table}/rows
-```
-
-Returns the keys of all rows in the table, sorted. Use [Get a row](#get-a-row) or [Query](#query) to read their columns.
-
-> **Note:** Listing a table that does not exist is not an error. It returns `200` with an empty list.
-
-**Response 200**
-
-```json
-{ "rows": ["0b7e19d4", "a3f10c2b"] }
-```
-
----
-
-### Get a row
-
-```
-GET /api/tables/{table}/rows/{rowKey}
-```
-
-Returns all columns of the row as a key/value map, or **404** if the row does not exist.
-
-To read only some columns, repeat the `column` query parameter:
-
-```
-GET /api/tables/{table}/rows/{rowKey}?column=email&column=age
-```
-
-Columns the row does not have are left out of `columns`. Unlike a full read, this returns `200` with empty `columns` when the row does not exist.
-
-**Response 200**
-
-```json
-{
-  "table": "users",
-  "rowKey": "a3f10c2b",
-  "columns": {
-    "email": "alice@example.com",
-    "age": 30,
-    "active": true
-  }
-}
-```
-
----
-
-### Check a row exists
-
-```
-HEAD /api/tables/{table}/rows/{rowKey}
-```
-
-Checks whether the row holds any cell, without reading its values. There is no response body.
-
-| Status | Meaning |
-|--------|---------|
-| 200 OK | The row exists |
-| 404 Not Found | The row does not exist |
-| 400 Bad Request | Invalid table name or row key |
-
----
-
-### Set a row
-
-```
-PUT /api/tables/{table}/rows/{rowKey}
-```
-
-Writes the given columns to the row (merge, not replace), creating the row if it does not exist. Columns not mentioned are left untouched. An empty object `{}` writes nothing.
-
-**Body** — a plain JSON object of column → value pairs:
-
-```json
-{
-  "email": "alice@example.com",
-  "age": 30
-}
-```
-
-**Response 200**
-
-```json
-{ "status": "ok" }
-```
-
----
-
-### Insert a row
-
-```
-POST /api/tables/{table}/rows
-```
-
-Creates a new row with an auto-generated key that is not yet used in the table. The body is a JSON object of initial column values. With an empty body `{}` a key is returned but nothing is stored, because a row exists only while it holds a cell.
+Reads many cells, possibly from different tables, from one consistent snapshot. Each cell needs `table`, `row` and `column`. The values come back in the order of `cells`, with `null` for a missing cell.
 
 **Body**
 
 ```json
 {
-  "email": "bob@example.com",
-  "score": 0
+  "cells": [
+    { "table": "users", "row": "alice", "column": "email" },
+    { "table": "users", "row": "bob", "column": "email" }
+  ]
 }
 ```
-
-**Response 201**
-
-```json
-{
-  "table": "users",
-  "rowKey": "d81c4f9a"
-}
-```
-
----
-
-### Delete a row
-
-```
-DELETE /api/tables/{table}/rows/{rowKey}
-```
-
-Removes the row and all its columns.
 
 **Response 200**
 
 ```json
-{ "status": "ok" }
+{ "values": ["alice@example.com", null] }
 ```
 
 ---
@@ -307,222 +159,136 @@ Removes the row and all its columns.
 ## Query
 
 ```
-POST /api/tables/{table}/query
+POST /api/query
 ```
 
-Scan, filter, and project rows. Send an empty body to return all rows. Unknown fields are ignored.
+Scans the rows of a table in ascending row key order and returns those that match. With `agg`, it returns one value computed over the matching rows instead.
 
-**Body fields** (all optional)
+**Body fields**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `prefix` | string | Only rows whose key starts with this prefix |
-| `startKey` | string | Inclusive lower bound on the row key range |
-| `endKey` | string | Inclusive upper bound on the row key range |
-| `select` | string[] | Columns to include; all columns returned if omitted |
-| `orderDesc` | bool | Sort rows by key in descending order (default: ascending) |
-| `offset` | int | Skip the first N matching rows |
-| `limit` | int | Return at most N rows |
-| `where` | Predicate[] | Predicates that must all hold (see below) |
-| `or` | Predicate[][] | Alternative predicate groups: a row matches if all predicates of any group hold. Cannot be combined with `where`, and no group may be empty |
-| `countOnly` | bool | Return only a count instead of row data |
-| `aggregate` | string | Return statistics over this numeric column instead of row data. Cannot be combined with `countOnly` |
+| `table` | string | **Required.** Table to scan |
+| `prefix` | string | Only row keys that start with this prefix |
+| `from` | string | Only row keys `>=` this key |
+| `to` | string | Only row keys `<` this key |
+| `where` | Predicate[] | Predicates that must all hold |
+| `select` | string[] | Columns to return. All columns if omitted |
+| `limit` | int | Stop after this many rows. `0` means no limit |
+| `agg` | string | Return `count`, `sum`, `avg`, `min` or `max` instead of rows |
+| `column` | string | Column for `sum`, `avg`, `min` and `max` |
 
-**Predicate object**
+Row keys compare byte by byte. As in Bigtable, `select` filters cells, and a row left with no cells is not returned: a row that has none of the selected columns is dropped. `limit` counts only the rows that are returned. To find rows that lack a column, use a `missing` predicate.
+
+**Predicate**
 
 ```json
-{ "column": "age", "op": ">=", "value": 18 }
+{ "column": "age", "cmp": ">=", "value": 18 }
 ```
 
-| `op` value | Meaning |
-|-----------|---------|
-| `"="` | Equal |
-| `"!="` | Not equal |
-| `">"` | Greater than |
-| `">="` | Greater than or equal |
-| `"<"` | Less than |
-| `"<="` | Less than or equal |
-| `"CONTAINS"` | String contains substring |
-| `"PREFIX"` | String starts with prefix |
-| `"EXISTS"` | Column is present (no `value` needed) |
-| `"MISSING"` | Column is absent (no `value` needed) |
+| `cmp` | Holds when |
+|-------|------------|
+| `=` `!=` `<` `<=` `>` `>=` | The cell compares to `value` as stated |
+| `prefix` | The string cell starts with `value` |
+| `contains` | The string cell contains `value` |
+| `exists` | The cell is present. `value` is not used |
+| `missing` | The cell is absent. `value` is not used |
 
-Any other `op` is rejected with **400**. Numbers compare with numbers, strings with strings and booleans with booleans; a value of a different kind never matches, except under `"!="`.
+Any other `cmp` is rejected with **400**, as is a `prefix` or `contains` with a value that is not a string.
+
+Numbers compare numerically, strings byte by byte, booleans with `false` before `true`, and timestamps by time. Only `missing` matches an absent cell. A cell of a different type than `value` never matches, **including under `!=`**. For example, `{"column": "age", "cmp": "!=", "value": 30}` skips rows without `age` and rows where `age` is a string.
 
 **Example request**
 
 ```json
 {
-  "prefix": "a3",
-  "select": ["email", "age"],
-  "where": [
-    { "column": "age", "op": ">=", "value": 18 },
-    { "column": "active", "op": "EXISTS" }
-  ],
-  "limit": 50
-}
-```
-
-**Response 200** — rows
-
-```json
-{
   "table": "users",
-  "rows": [
-    { "rowKey": "a3f10c2b", "columns": { "email": "alice@example.com", "age": 30 } }
-  ],
-  "count": 1
+  "where": [ { "column": "age", "cmp": ">=", "value": 18 } ],
+  "select": ["email"],
+  "limit": 10
 }
-```
-
-**Example request** — `or`
-
-Rows that are active adults, or that have no `age` at all:
-
-```json
-{
-  "or": [
-    [
-      { "column": "age", "op": ">=", "value": 18 },
-      { "column": "active", "op": "=", "value": true }
-    ],
-    [
-      { "column": "age", "op": "MISSING" }
-    ]
-  ]
-}
-```
-
-**Response 200** — count only
-
-```json
-{ "count": 42 }
-```
-
-**Response 200** — aggregate
-
-`count` is the number of matching rows whose column holds a number. Rows where the column is missing or is not a number are skipped. `offset` and `limit` are ignored, as with `countOnly`. When no row has a number, every field is `0`.
-
-```json
-{
-  "table": "users",
-  "column": "age",
-  "stats": { "count": 3, "sum": 90, "min": 25, "max": 35, "avg": 30 }
-}
-```
-
-Each item in `rows` has the shape:
-
-```json
-{ "rowKey": "a3f10c2b", "columns": { "col": "val" } }
-```
-
----
-
-### Delete by query
-
-```
-POST /api/tables/{table}/query/delete
-```
-
-Deletes every row that matches the filter in one transaction: either all of them are deleted or none are. This cannot be undone.
-
-The body takes the filter fields of [Query](#query): `prefix`, `startKey`, `endKey`, `orderDesc`, `offset`, `limit`, `where` and `or`. `offset` and `limit` apply as in a query, so `limit` lets you delete in chunks. A very large delete can fail with **500** because it does not fit in one transaction; nothing is deleted then, and you can retry with a `limit`.
-
-A body is required, and unknown fields are rejected with **400**, so a misspelled `where` cannot delete every row. Send `{}` to delete every row of the table.
-
-**Example request**
-
-```json
-{ "where": [ { "column": "active", "op": "=", "value": false } ] }
 ```
 
 **Response 200**
 
+`rows` is in row key order. Each item holds the row's `key` and its selected columns in `row`.
+
 ```json
-{ "table": "users", "deleted": 12 }
+{
+  "rows": [
+    { "key": "alice", "row": { "email": "alice@example.com" } }
+  ]
+}
 ```
+
+### Aggregates
+
+With `agg`, `select` is ignored and the response is a single value:
+
+```json
+{ "table": "users", "agg": "avg", "column": "age" }
+```
+
+```json
+{ "value": 27.5 }
+```
+
+| `agg` | Result |
+|-------|--------|
+| `count` | Number of matching rows. `column` is not used |
+| `sum` | Sum of `column` over the matching rows that have it. `0` if none do |
+| `avg` | `sum` divided by the number of matching rows that have `column`. **404** if none do |
+| `min`, `max` | Smallest or largest value of `column`, of any type. **404** if no matching row has it |
+
+`limit` applies to aggregates as well. For `count` it counts every matching row. For the others it counts only matching rows that have `column`, so `{"agg": "sum", "column": "age", "limit": 10}` sums the first ten `age` values. `sum` and `avg` reject a non-number value with **400**. `min` and `max` reject a column that mixes types with **400**.
 
 ---
 
-## Batch operations
+## Batch
 
 ```
-POST /api/tables/{table}/batch
+POST /api/batch
 ```
 
-Multi-row read, write, delete, or insert in a single request. Unknown fields in the body or in a mutation are rejected with **400**, so a misspelled `setCols` is not silently dropped.
+Applies a list of operations atomically and in order, in one transaction. Either all operations take effect or none do. Later operations see the effects of earlier ones, so an `if` can check a cell that an earlier `set` wrote.
 
 **Body**
 
 ```json
 {
-  "action": "write" | "get" | "delete" | "insert",
-  "rowKeys": ["..."],
-  "mutations": [...],
-  "rows": [...]
-}
-```
-
----
-
-### Batch get
-
-Retrieve multiple rows by their keys. Rows that do not exist are left out of `rows`.
-
-```json
-{
-  "action": "get",
-  "rowKeys": ["a3f10c2b", "d81c4f9a"]
-}
-```
-
-**Response 200**
-
-```json
-{
-  "table": "users",
-  "rows": {
-    "a3f10c2b": { "email": "alice@example.com" },
-    "d81c4f9a": { "email": "bob@example.com" }
-  }
-}
-```
-
----
-
-### Batch write
-
-Apply multiple row mutations atomically in one transaction.
-
-```json
-{
-  "action": "write",
-  "mutations": [
-    {
-      "rowKey": "a3f10c2b",
-      "setCols": { "score": 100 }
-    },
-    {
-      "rowKey": "d81c4f9a",
-      "delCols": ["temp_field"]
-    },
-    {
-      "rowKey": "ff001122",
-      "delete": true
-    }
+  "ops": [
+    { "op": "if", "table": "posts", "row": "p1", "column": "version", "cmp": "=", "value": 3 },
+    { "op": "set", "table": "posts", "row": "p1", "column": "version", "value": 4 },
+    { "op": "set", "table": "posts", "row": "p1", "column": "status", "value": "published" },
+    { "op": "delete", "table": "posts", "row": "p1", "column": "draft" },
+    { "op": "incr", "table": "stats", "row": "posts", "column": "published", "delta": 1 }
   ]
 }
 ```
 
-**Mutation fields**
+**Operations**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `rowKey` | string | Target row (required) |
-| `setCols` | object | Columns to set (key/value pairs) |
-| `delCols` | string[] | Column names to delete |
-| `delete` | bool | If `true`, delete the entire row |
+| `op` | Fields | Effect |
+|------|--------|--------|
+| `set` | `table`, `row`, `column`, `value` | Write a cell, creating it if needed |
+| `delete` | `table`, and optionally `row` and `column` | Delete a cell, row, column or table (see below) |
+| `if` | `table`, `row`, `column`, `cmp`, `value` | Check a cell with a [predicate](#query). If it fails, the batch is aborted with **409** and nothing is written |
+| `incr` | `table`, `row`, `column`, `delta` | Add `delta` to a number, a missing cell counting as 0 |
+
+Fields that an operation does not use are ignored.
+
+`delete` picks its scope from the fields given, the same way as [Get](#get):
+
+| Fields | Deletes |
+|--------|---------|
+| `row` and `column` | One cell |
+| `row` only | The whole row |
+| `column` only | That column in every row of the table |
+| neither | **The whole table.** This cannot be undone |
+
+Deleting something that does not exist is not an error.
+
+A batch that does not fit in one transaction fails with **413**. The error names the cell of the failing `if` as `table/row/column`. If another writer changes a cell this batch read before it commits, the batch fails with **409** and can be retried. An empty `ops` list does nothing.
 
 **Response 200**
 
@@ -530,201 +296,32 @@ Apply multiple row mutations atomically in one transaction.
 { "status": "ok" }
 ```
 
----
-
-### Batch delete
-
-Delete multiple rows in one transaction. Keys of rows that do not exist are not an error.
+**Response 409**, when an `if` failed:
 
 ```json
-{
-  "action": "delete",
-  "rowKeys": ["a3f10c2b", "d81c4f9a"]
-}
-```
-
-**Response 200**
-
-```json
-{ "status": "ok" }
+{ "error": "mustang: condition failed: posts/p1/version" }
 ```
 
 ---
 
-### Batch insert
-
-Insert multiple rows atomically, each under a new auto-generated key that is not yet used in the table. The keys are returned in the order of `rows`. An empty row `{}` gets a key but stores nothing, as with [Insert a row](#insert-a-row).
-
-```json
-{
-  "action": "insert",
-  "rows": [
-    { "email": "alice@example.com", "score": 0 },
-    { "email": "bob@example.com" }
-  ]
-}
-```
-
-**Response 201**
-
-```json
-{
-  "table": "users",
-  "rowKeys": ["a3f10c2b", "d81c4f9a"]
-}
-```
-
----
-
-## Atomic cell operations
-
-Increment, append and prepend return the new value of the cell. Check-and-set and check-and-delete return `{"status":"ok"}`.
-
-### Increment
+## Incr
 
 ```
-POST /api/tables/{table}/rows/{rowKey}/incr
+POST /api/incr
 ```
 
-Atomically adds `delta` to a numeric cell. A cell that does not exist counts as zero. A `delta` that is not a JSON number is rejected with **400**.
+Atomically adds `delta` to a numeric cell and returns the new value. A missing cell counts as 0. A cell that holds something other than a number is rejected with **400**, as is a `delta` that is not a JSON number. A `delta` that is left out counts as 0.
+
+If concurrent writes conflict, the server retries them itself, so a `409` is rare.
 
 **Body**
 
 ```json
-{ "column": "score", "delta": 5 }
+{ "table": "users", "row": "alice", "column": "score", "delta": 5 }
 ```
 
 **Response 200**
 
 ```json
 { "value": 105 }
-```
-
----
-
-### Append
-
-```
-POST /api/tables/{table}/rows/{rowKey}/append
-```
-
-Atomically appends a string to a string cell. The cell is created if it does not exist.
-
-**Body**
-
-```json
-{ "column": "log", "value": " entry2" }
-```
-
-**Response 200**
-
-```json
-{ "value": "entry1 entry2" }
-```
-
----
-
-### Prepend
-
-```
-POST /api/tables/{table}/rows/{rowKey}/prepend
-```
-
-Atomically prepends a string to a string cell. The cell is created if it does not exist.
-
-**Body**
-
-```json
-{ "column": "log", "value": "prefix: " }
-```
-
-**Response 200**
-
-```json
-{ "value": "prefix: entry1" }
-```
-
----
-
-### Check-and-set (CAS)
-
-```
-POST /api/tables/{table}/rows/{rowKey}/cas
-```
-
-Atomically checks a condition on the row and writes columns only if the condition holds. Returns **409 Conflict** if the check fails.
-
-Omit `condition` to write unconditionally. Unknown fields in the body are rejected with **400**, so a misspelled `condition` cannot become an unconditional write.
-
-**Body**
-
-```json
-{
-  "condition": {
-    "column": "version",
-    "op": "=",
-    "value": 3
-  },
-  "setCols": {
-    "version": 4,
-    "status": "published"
-  }
-}
-```
-
-| `condition` field | Type | Description |
-|-------------------|------|-------------|
-| `column` | string | Column to check |
-| `op` | CompareOp | Any operator from the query table above |
-| `value` | any | Value to compare against |
-
-**Response 200**
-
-```json
-{ "status": "ok" }
-```
-
-**Response 409** — condition failed
-
-```json
-{ "error": "check and put condition failed" }
-```
-
----
-
-### Check-and-delete (CAD)
-
-```
-POST /api/tables/{table}/rows/{rowKey}/cad
-```
-
-Atomically checks a condition on the row and, only if it holds, deletes the columns in `delCols`. Without `delCols`, it deletes the whole row. Returns **409 Conflict** if the check fails.
-
-Omit `condition` to delete unconditionally. Unknown fields in the body are rejected with **400**, so a misspelled `delCols` cannot delete the whole row.
-
-**Body**
-
-```json
-{
-  "condition": {
-    "column": "status",
-    "op": "=",
-    "value": "draft"
-  },
-  "delCols": ["body", "status"]
-}
-```
-
-`condition` has the same fields as in [CAS](#check-and-set-cas).
-
-**Response 200**
-
-```json
-{ "status": "ok" }
-```
-
-**Response 409** — condition failed
-
-```json
-{ "error": "check and put condition failed" }
 ```
