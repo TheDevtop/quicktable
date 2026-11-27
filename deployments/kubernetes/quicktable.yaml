@@ -11,6 +11,16 @@ spec:
     requests:
       storage: 8Gi
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: quicktable-token
+  labels:
+    app.kubernetes.io/name: quicktable
+type: Opaque
+stringData:
+  token: SECRET-TOKEN-HERE
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -38,6 +48,13 @@ spec:
         - name: quicktable
           image: ghcr.io/thedevtop/quicktable:latest
           imagePullPolicy: Always
+          args: ["-a", ":16000", "-d", "/data", "-t", "$(QUICKTABLE_TOKEN)"]
+          env:
+            - name: QUICKTABLE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: quicktable-token
+                  key: token
           ports:
             - name: http
               containerPort: 16000
