@@ -51,15 +51,16 @@ type (
 		Value  any    `json:"value,omitempty" jsonschema:"Operand: number, string or boolean; not used by exists and missing"`
 	}
 	queryReq struct {
-		Table  string   `json:"table" jsonschema:"Table name"`
-		Prefix string   `json:"prefix,omitempty" jsonschema:"Only row keys with this prefix"`
-		From   string   `json:"from,omitempty" jsonschema:"Only row keys >= from"`
-		To     string   `json:"to,omitempty" jsonschema:"Only row keys < to"`
-		Where  []pred   `json:"where,omitempty" jsonschema:"Predicates that must all hold"`
-		Select []string `json:"select,omitempty" jsonschema:"Columns to return; all if omitted"`
-		Limit  int      `json:"limit,omitempty" jsonschema:"Stop after this many matching rows; 0 is no limit"`
-		Agg    string   `json:"agg,omitempty" jsonschema:"Fold the matching rows instead: count, or sum, avg, min, max of column"`
-		Column string   `json:"column,omitempty" jsonschema:"Column for sum, avg, min and max"`
+		Table   string   `json:"table" jsonschema:"Table name"`
+		Prefix  string   `json:"prefix,omitempty" jsonschema:"Only row keys with this prefix"`
+		From    string   `json:"from,omitempty" jsonschema:"Only row keys >= from"`
+		To      string   `json:"to,omitempty" jsonschema:"Only row keys < to"`
+		Where   []pred   `json:"where,omitempty" jsonschema:"Predicates that must all hold"`
+		Select  []string `json:"select,omitempty" jsonschema:"Columns to return; all if omitted"`
+		Limit   int      `json:"limit,omitempty" jsonschema:"Stop after this many matching rows; 0 is no limit"`
+		Reverse bool     `json:"reverse,omitempty" jsonschema:"Scan row keys in descending order, so limit keeps the last rows"`
+		Agg     string   `json:"agg,omitempty" jsonschema:"Fold the matching rows instead: count, or sum, avg, min, max of column"`
+		Column  string   `json:"column,omitempty" jsonschema:"Column for sum, avg, min and max"`
 	}
 	batchOp struct {
 		Op     string  `json:"op" jsonschema:"set, delete, if or incr"`
@@ -160,6 +161,9 @@ func query(s *mustang.Store, req queryReq) (any, error) {
 	}
 	if len(req.Select) > 0 {
 		q.Select(req.Select...)
+	}
+	if req.Reverse {
+		q.Reverse()
 	}
 
 	var v any

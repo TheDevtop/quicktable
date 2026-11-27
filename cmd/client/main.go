@@ -18,7 +18,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -51,11 +50,11 @@ const usage = `commands:
   help | quit
 
 clauses:
-  prefix <p>  from <k>  to <k>  limit <n>  select <c>...
+  prefix <p>  from <k>  to <k>  limit <n>  reverse  select <c>...
   where <c> <op> [v]   ops: = != < <= > >= prefix contains exists missing
 
-values: 30 is a number, true/false a bool, 2026-11-26T10:00:00Z a time,
-  anything else a string; "quoted" is always a string.
+values: 30 is a number, true/false a bool, anything else a string;
+  "quoted" is always a string.
 `
 
 var (
@@ -469,6 +468,10 @@ func (r *repl) query(cmd string, args []token) error {
 			q.Select(cols...)
 			continue
 		}
+		if kw == "reverse" {
+			q.Reverse()
+			continue
+		}
 		if kw == "where" {
 			if len(rest) < 2 {
 				return errArgs
@@ -550,7 +553,7 @@ func (r *repl) query(cmd string, args []token) error {
 
 func isClause(s string) bool {
 	switch s {
-	case "prefix", "from", "to", "limit", "select", "where":
+	case "prefix", "from", "to", "limit", "reverse", "select", "where":
 		return true
 	}
 	return false
@@ -611,9 +614,6 @@ func parse(t token) mustang.Value {
 			return f
 		}
 	}
-	if tm, err := time.Parse(time.RFC3339Nano, t.s); err == nil {
-		return tm
-	}
 	return t.s
 }
 
@@ -626,8 +626,6 @@ func format(v mustang.Value) string {
 		return strconv.FormatFloat(v, 'g', -1, 64)
 	case bool:
 		return strconv.FormatBool(v)
-	case time.Time:
-		return v.Format(time.RFC3339Nano)
 	}
 	return fmt.Sprint(v)
 }

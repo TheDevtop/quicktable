@@ -6,7 +6,10 @@ A store holds tables, a table holds rows named by a key,
 and a row holds cells named by a column.
 Rows need not share columns,
 and a table or row exists only while it holds a cell.
-A cell holds a number, string, boolean or time.
+A cell holds a number, string or boolean.
+Times are strings in fixed-width UTC, such as `2026-11-26T10:00:00Z`;
+these sort like the instants they name,
+so row key and value ranges select time ranges.
 Data is kept on disk by the Mustang engine, built on Badger,
 or in memory.
 

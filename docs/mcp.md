@@ -67,7 +67,7 @@ The REST reference covers each tool's arguments, scopes and results. The points 
 - **Values** are numbers, strings or booleans. `null`, arrays and objects are rejected.
 - **`qt_get` and `qt_batch` delete pick their scope from the arguments given.** Leaving out `row` and `column` in a `delete` operation drops the whole table.
 - **Predicates** use `cmp`, one of `=`, `!=`, `<`, `<=`, `>`, `>=`, `prefix`, `contains`, `exists` and `missing`. Only `missing` matches an absent cell, and a cell of another type than `value` never matches, not even under `!=`.
-- **`qt_query` ranges** are `from` (inclusive) and `to` (exclusive), plus `prefix`. Rows come back in ascending row key order.
+- **`qt_query` ranges** are `from` (inclusive) and `to` (exclusive), plus `prefix`. Rows come back in ascending row key order, or descending with `reverse`; `reverse` with `limit` reads the last rows.
 - **`qt_query` `select`** drops rows that have none of the selected columns, as in Bigtable, and `limit` counts only the rows returned.
 - **`qt_batch`** applies its `ops` in order in one transaction. A failing `if` aborts the batch and nothing is written.
 

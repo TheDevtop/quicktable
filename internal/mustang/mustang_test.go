@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/dgraph-io/badger/v4"
 )
@@ -36,14 +36,13 @@ func load(t testing.TB, s *Store, name string, tab Table) {
 
 func TestSmoke(t *testing.T) {
 	s := open(t)
-	now := time.Now().UTC()
 	must := func(err error) {
 		t.Helper()
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	load(t, s, "users", Table{"a": {"name": "x", "age": 3.0}, "b": {"ok": true, "at": now}})
+	load(t, s, "users", Table{"a": {"name": "x", "age": 3.0}, "b": {"ok": true, "at": "2026-11-26T10:00:00Z"}})
 	must(s.Batch().Set("users2", "z", "name", "y").Commit())
 	tabs, _ := s.ScanTables()
 	rows, _ := s.ScanRows("users")
@@ -54,8 +53,8 @@ func TestSmoke(t *testing.T) {
 	}
 	v, err := s.GetValue("users", "b", "at")
 	must(err)
-	if !v.(time.Time).Equal(now) {
-		t.Fatal("time")
+	if v != "2026-11-26T10:00:00Z" {
+		t.Fatal("at", v)
 	}
 	col, _ := s.GetColumn("users", "name")
 	if len(col) != 1 {
@@ -320,10 +319,8 @@ func TestIfContains(t *testing.T) {
 // TestOrder checks that encodings order like their values, as
 // conditions and Min/Max compare them raw.
 func TestOrder(t *testing.T) {
-	t0 := time.Date(1969, 7, 20, 20, 17, 0, 0, time.UTC)
 	vals := [][]Value{
 		{math.Inf(-1), -1e9, -1.5, -0.25, 0.0, 1e-300, 0.25, 2.0, 1e9, math.Inf(1)},
-		{t0.Add(-time.Second), t0.Add(-1), t0, t0.Add(1), t0.Add(500 * time.Millisecond), t0.Add(time.Second)},
 		{false, true},
 		{"", "a", "a\x00", "ab", "b"},
 	}
@@ -350,18 +347,101 @@ func TestOrder(t *testing.T) {
 	if _, err := encode(math.NaN()); !errors.Is(err, ErrType) {
 		t.Error("NaN")
 	}
-	// Times compare as instants, whatever their zone.
+}
+
+// TestReverse checks that a reverse scan returns exactly the rows of
+// a forward scan, backwards. Rows are wide enough that next seeks past
+// them, and keys share prefixes ("a" < "a0" < "ab") and a neighbouring
+// table ("r2") so the bounds are exercised.
+func TestReverse(t *testing.T) {
 	s := open(t)
-	cet := time.FixedZone("CET", 3600)
-	load(t, s, "e", Table{"a": {"at": t0}, "b": {"at": t0.Add(time.Hour)}, "c": {"at": t0.Add(-time.Hour)}})
-	if n, _ := s.Query("e").Where("at", Eq, t0.In(cet)).Count(); n != 1 {
-		t.Error("zone", n)
+	tab := Table{}
+	for _, k := range []string{"a", "a0", "a1", "ab", "b", "b5", "c", "c\xff", "d"} {
+		row := Row{"n": float64(len(k))}
+		for j := range 2 * seekAfter {
+			row[fmt.Sprintf("c%02d", j)] = k
+		}
+		tab[k] = row
 	}
-	if v, _ := s.Query("e").Max("at"); v != t0.Add(time.Hour) {
+	delete(tab["b"], "n")
+	load(t, s, "r", tab)
+	load(t, s, "r2", Table{"a": {"n": 1.0}, "z": {"n": 1.0}})
+	load(t, s, "q", Table{"zz": {"n": 1.0}})
+
+	qs := []func() *Query{
+		func() *Query { return s.Query("r") },
+		func() *Query { return s.Query("r").Prefix("a") },
+		func() *Query { return s.Query("r").Prefix("c") },
+		func() *Query { return s.Query("r").Prefix("zz") },
+		func() *Query { return s.Query("r").From("a1").To("c") },
+		func() *Query { return s.Query("r").From("a1") },
+		func() *Query { return s.Query("r").To("b") },
+		func() *Query { return s.Query("r").To("b5") },
+		func() *Query { return s.Query("r").Prefix("a").To("a1") },
+		func() *Query { return s.Query("r").Prefix("b").From("a") },
+		func() *Query { return s.Query("r").Prefix("a").From("b") },
+		func() *Query { return s.Query("r").Where("n", Ge, 2.0) },
+		func() *Query { return s.Query("r").Where("n", Missing, nil) },
+		func() *Query { return s.Query("r").Select("n") },
+		func() *Query { return s.Query("r").Select("c03", "n").Where("c05", Prefix, "a") },
+	}
+	for i, q := range qs {
+		fw, err := q().Run()
+		if err != nil {
+			t.Fatal(i, err)
+		}
+		rv, err := q().Reverse().Run()
+		if err != nil {
+			t.Fatal(i, err)
+		}
+		slices.Reverse(rv)
+		if fmt.Sprint(fw) != fmt.Sprint(rv) {
+			t.Errorf("case %d:\n fw %v\n rv %v", i, fw, rv)
+		}
+		if len(fw) == 0 {
+			continue
+		}
+		last, err := q().Reverse().Limit(1).Run()
+		if err != nil || len(last) != 1 || last[0].Key != fw[len(fw)-1].Key {
+			t.Errorf("case %d: last %v %v", i, last, err)
+		}
+	}
+	if n, _ := s.Query("r").Reverse().Count(); n != len(tab) {
+		t.Error("count", n)
+	}
+	if v, _ := s.Query("r").Reverse().Max("n"); v != 2.0 {
 		t.Error("max", v)
 	}
-	if n, _ := s.Query("e").Where("at", Lt, t0).Count(); n != 1 {
-		t.Error("lt", n)
+}
+
+// TestTimeRange checks the timestamp convention: fixed-width UTC
+// strings order like the instants, and a cut-off timestamp is a bound.
+func TestTimeRange(t *testing.T) {
+	s := open(t)
+	load(t, s, "m", Table{
+		"s1/2026-11-25T23:59:59Z": {"at": "2026-11-25T23:59:59Z"},
+		"s1/2026-11-26T00:00:00Z": {"at": "2026-11-26T00:00:00Z"},
+		"s1/2026-11-26T12:30:00Z": {"at": "2026-11-26T12:30:00Z"},
+		"s1/2026-11-27T00:00:00Z": {"at": "2026-11-27T00:00:00Z"},
+		"s2/2026-11-26T08:00:00Z": {"at": "2026-11-26T08:00:00Z"},
+	})
+	cases := []struct {
+		q    *Query
+		want int
+	}{
+		{s.Query("m").From("s1/2026-11-26").To("s1/2026-11-27"), 2},
+		{s.Query("m").Prefix("s1/2026-11"), 4},
+		{s.Query("m").Where("at", Ge, "2026-11-26").Where("at", Lt, "2026-11-27"), 3},
+		{s.Query("m").Prefix("s1/").Reverse().Limit(1).Where("at", Lt, "2026-11-27"), 1},
+	}
+	for i, c := range cases {
+		if n, err := c.q.Count(); err != nil || n != c.want {
+			t.Errorf("case %d: %d %v", i, n, err)
+		}
+	}
+	rs, err := s.Query("m").Prefix("s1/").Reverse().Limit(1).Where("at", Lt, "2026-11-27").Run()
+	if err != nil || len(rs) != 1 || rs[0].Key != "s1/2026-11-26T12:30:00Z" {
+		t.Fatal("latest", rs, err)
 	}
 }
 
@@ -404,14 +484,32 @@ func BenchmarkCount(b *testing.B) {
 	s := open(b)
 	tab := Table{}
 	for i := range 20000 {
-		tab[fmt.Sprintf("r%05d", i)] = Row{"age": float64(i % 100), "at": time.Unix(int64(i), 0)}
+		tab[fmt.Sprintf("r%05d", i)] = Row{"age": float64(i % 100), "at": fmt.Sprintf("t%05d", i)}
 	}
 	load(b, s, "t", tab)
 	b.ReportAllocs()
 	for b.Loop() {
-		n, err := s.Query("t").Where("age", Ge, 50.0).Where("at", Gt, time.Unix(100, 0)).Count()
+		n, err := s.Query("t").Where("age", Ge, 50.0).Where("at", Gt, "t00100").Count()
 		if err != nil || n == 0 {
 			b.Fatal(n, err)
+		}
+	}
+}
+
+// BenchmarkLatest reads the newest row of one series among many,
+// the common time-range query that Reverse exists for.
+func BenchmarkLatest(b *testing.B) {
+	s := open(b)
+	tab := Table{}
+	for i := range 20000 {
+		tab[fmt.Sprintf("s%02d/%05d", i%10, i)] = Row{"v": float64(i), "name": "x"}
+	}
+	load(b, s, "t", tab)
+	b.ReportAllocs()
+	for b.Loop() {
+		rs, err := s.Query("t").Prefix("s03/").Reverse().Limit(1).Run()
+		if err != nil || len(rs) != 1 || rs[0].Key != "s03/19993" {
+			b.Fatal(rs, err)
 		}
 	}
 }

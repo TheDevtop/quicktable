@@ -51,7 +51,7 @@ and stops at the first error;
 see
 .BR DIAGNOSTICS .
 .SS Values
-A value is a number, string, boolean or time,
+A value is a number, string or boolean,
 told apart by its spelling:
 .TP
 .B 30 -1.5 2e3
@@ -66,11 +66,6 @@ are strings.
 .B true false
 a boolean.
 .TP
-.B 2026-11-26T10:00:00Z
-a time, in RFC 3339 form.
-It is stored as an instant in UTC;
-the zone is not kept.
-.TP
 .B \(dqtext\(dq
 a string.
 Any other word is a string too,
@@ -79,6 +74,17 @@ but quoting makes one of a word that would be read as another type,
 or holds white space,
 .BR "\(dqAnn A\(dq" .
 Quoted strings take Go backslash escapes.
+.PP
+There is no time type.
+Times written as strings in fixed-width UTC, such as
+.BR 2026-11-26T10:00:00Z ,
+order as the instants do,
+and a shortened time such as
+.B 2026-11-26
+is a bound for a range.
+A year alone is a number; quote it,
+.BR \(dq2026\(dq ,
+to compare it with times.
 .PP
 Values are printed in the same form,
 strings always quoted,
@@ -208,6 +214,12 @@ stop after
 .I n
 matching rows;
 0 means no limit.
+.TP
+.B reverse
+scan keys in descending order,
+so
+.B limit
+keeps the last rows.
 .RE
 .PP
 The operators are
@@ -229,7 +241,7 @@ which take no value.
 A value of another type than the operand never matches,
 not even
 .BR != .
-Numbers, strings, booleans and times order as expected,
+Numbers, strings and booleans order as expected,
 strings bytewise.
 .SS Batches
 .TP

@@ -91,7 +91,8 @@ func (c cond) holds(b []byte) bool {
 	return n >= 0 // Ge
 }
 
-// Result is one matching row; results are returned in rowKey order.
+// Result is one matching row; results are returned in rowKey order,
+// descending under Reverse.
 type Result struct {
 	Key string
 	Row Row
@@ -105,6 +106,7 @@ type Query struct {
 	conds    []cond
 	cols     map[string]bool
 	limit    int
+	rev      bool
 	err      error
 }
 
@@ -164,6 +166,13 @@ func (q *Query) Select(cols ...string) *Query {
 // Limit stops after n returned rows; 0 means no limit.
 func (q *Query) Limit(n int) *Query {
 	q.limit = n
+	return q
+}
+
+// Reverse scans rowKeys in descending order, so Limit keeps the last
+// rows of the range rather than the first.
+func (q *Query) Reverse() *Query {
+	q.rev = true
 	return q
 }
 
@@ -284,6 +293,18 @@ const seekAfter = 8
 // errStop ends a scan early without failing it.
 var errStop = errors.New("stop")
 
+// after returns the smallest key greater than every key starting with p.
+func after(p []byte) []byte {
+	b := bytes.Clone(p)
+	for i := len(b) - 1; i >= 0; i-- {
+		if b[i] != 0xff {
+			b[i]++
+			return b[:i+1]
+		}
+	}
+	return nil
+}
+
 // scan calls fn with the key of every matching row, up to the limit,
 // and the cells of its columns in out; a nil out keeps every column.
 // A row with none of the out columns is skipped and not counted, but
@@ -303,14 +324,26 @@ func (q *Query) scan(out map[string]bool, fn func(k []byte, cells []cell) error)
 		}
 	}
 	tab := key(q.table)
-	pre, to := []byte(q.prefix), []byte(q.to)
+	pre, from, to := []byte(q.prefix), []byte(q.from), []byte(q.to)
+	// A reverse seek lands on the last key <= start, so it starts at
+	// the upper bound; no cell key equals either bound, as a cell key
+	// has two separators and these at most one.
 	start := append(append([]byte{}, tab...), max(q.prefix, q.from)...)
+	dir := 1
+	if q.rev {
+		start = after(append(append([]byte{}, tab...), pre...))
+		if hi := append(append([]byte{}, tab...), to...); len(to) > 0 && bytes.Compare(hi, start) < 0 {
+			start = hi
+		}
+		dir = -1
+	}
 	n := 0
 
 	err := q.s.db.View(func(txn *badger.Txn) error {
 		opt := badger.DefaultIteratorOptions
 		opt.PrefetchValues = false
 		opt.Prefix = tab
+		opt.Reverse = q.rev
 		it := txn.NewIterator(opt)
 		defer it.Close()
 
@@ -372,12 +405,16 @@ func (q *Query) scan(out map[string]bool, fn func(k []byte, cells []cell) error)
 		}
 		// next moves past the rest of the current row. A Seek costs far
 		// more than a step, so narrow rows are stepped over and only
-		// wide rows are sought past; a row's keys end before sep+1.
+		// wide rows are sought past; a row's keys lie between tab+r and
+		// tab+r+(sep+1).
 		next := func(r []byte) {
-			skip = append(append(append(skip[:0], tab...), r...), sep+1)
+			skip = append(append(skip[:0], tab...), r...)
+			if !q.rev {
+				skip = append(skip, sep+1)
+			}
 			for range seekAfter {
 				it.Next()
-				if !it.Valid() || bytes.Compare(it.Item().Key(), skip) >= 0 {
+				if !it.Valid() || bytes.Compare(it.Item().Key(), skip)*dir >= 0 {
 					return
 				}
 			}
@@ -392,7 +429,7 @@ func (q *Query) scan(out map[string]bool, fn func(k []byte, cells []cell) error)
 				return fmt.Errorf("%w: key %q", ErrCorrupt, k)
 			}
 			r, c := k[:i], k[i+1:]
-			if !bytes.HasPrefix(r, pre) || (len(to) > 0 && bytes.Compare(r, to) >= 0) {
+			if !bytes.HasPrefix(r, pre) || (len(to) > 0 && bytes.Compare(r, to) >= 0) || (q.rev && bytes.Compare(r, from) < 0) {
 				break
 			}
 			if !bytes.Equal(r, cur) {

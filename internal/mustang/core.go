@@ -14,13 +14,12 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/dgraph-io/badger/v4"
 )
 
-// Value holds a string, time.Time, bool or float64.
+// Value holds a string, bool or float64.
 type Value any
 
 type (
@@ -33,7 +32,6 @@ const sep byte = 0x00
 // Value tags; stored as the first byte of every encoded value.
 const (
 	tagString byte = iota + 1
-	tagTime
 	tagBool
 	tagNumber
 )
@@ -112,17 +110,10 @@ func field(k []byte, lvl int) []byte {
 // encode tags v and lays it out so that, for values of one type,
 // bytes.Compare on the encodings orders them like the values.
 // Conditions and Min/Max therefore work on raw cells without decoding.
-// Times are stored as a UTC instant; the zone is not kept.
 func encode(v Value) ([]byte, error) {
 	switch v := v.(type) {
 	case string:
 		return append([]byte{tagString}, v...), nil
-	case time.Time:
-		buf := make([]byte, 13)
-		buf[0] = tagTime
-		binary.BigEndian.PutUint64(buf[1:], uint64(v.Unix())^(1<<63))
-		binary.BigEndian.PutUint32(buf[9:], uint32(v.Nanosecond()))
-		return buf, nil
 	case bool:
 		if v {
 			return []byte{tagBool, 1}, nil
@@ -157,12 +148,6 @@ func decode(b []byte) (Value, error) {
 	switch tag {
 	case tagString:
 		return string(p), nil
-	case tagTime:
-		if len(p) != 12 {
-			return nil, ErrCorrupt
-		}
-		sec := int64(binary.BigEndian.Uint64(p) ^ (1 << 63))
-		return time.Unix(sec, int64(binary.BigEndian.Uint32(p[8:]))).UTC(), nil
 	case tagBool:
 		if len(p) != 1 {
 			return nil, ErrCorrupt

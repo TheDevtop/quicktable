@@ -25,7 +25,7 @@ A request with a missing, malformed or wrong token is rejected with **401 Unauth
 
 **Names:** table names, row keys and column names are any non-empty string without whitespace or NUL bytes. There is no fixed key format, and the server does not generate keys.
 
-**Values:** a cell holds a JSON number, string or boolean. Numbers are stored as 64-bit floats, so integers above 2^53 lose precision. `null`, arrays and objects are rejected with **400**. Cells written by other clients, such as the qt shell, can also hold timestamps. These are returned as RFC 3339 strings in UTC, but a JSON string you send is always stored as a string.
+**Values:** a cell holds a JSON number, string or boolean. Numbers are stored as 64-bit floats, so integers above 2^53 lose precision. `null`, arrays and objects are rejected with **400**. There is no time type: store times as strings in fixed-width UTC, such as `2026-11-26T10:00:00Z`, and they sort in time order. Keep the width fixed: zone offsets, or fractional seconds whose trailing zeros are dropped, break the order.
 
 A table, row or column is not stored on its own. It exists only while it holds at least one cell, so deleting its last cell removes it.
 
@@ -162,7 +162,7 @@ Reads many cells, possibly from different tables, from one consistent snapshot. 
 POST /api/query
 ```
 
-Scans the rows of a table in ascending row key order and returns those that match. With `agg`, it returns one value computed over the matching rows instead.
+Scans the rows of a table in ascending row key order, or descending with `reverse`, and returns those that match. With `agg`, it returns one value computed over the matching rows instead.
 
 **Body fields**
 
@@ -175,10 +175,13 @@ Scans the rows of a table in ascending row key order and returns those that matc
 | `where` | Predicate[] | Predicates that must all hold |
 | `select` | string[] | Columns to return. All columns if omitted |
 | `limit` | int | Stop after this many rows. `0` means no limit |
+| `reverse` | bool | Scan in descending row key order, so `limit` keeps the last rows |
 | `agg` | string | Return `count`, `sum`, `avg`, `min` or `max` instead of rows |
 | `column` | string | Column for `sum`, `avg`, `min` and `max` |
 
 Row keys compare byte by byte. As in Bigtable, `select` filters cells, and a row left with no cells is not returned: a row that has none of the selected columns is dropped. `limit` counts only the rows that are returned. To find rows that lack a column, use a `missing` predicate.
+
+For time ranges, put the time last in the row key, as in `sensor1/2026-11-26T10:00:00Z`. A shortened time is a valid bound: `"from": "sensor1/2026-11-26", "to": "sensor1/2026-11-27"` selects one day, and `"prefix": "sensor1/", "reverse": true, "limit": 1` reads the latest row without scanning the rest.
 
 **Predicate**
 
@@ -196,7 +199,7 @@ Row keys compare byte by byte. As in Bigtable, `select` filters cells, and a row
 
 Any other `cmp` is rejected with **400**, as is a `prefix` or `contains` with a value that is not a string.
 
-Numbers compare numerically, strings byte by byte, booleans with `false` before `true`, and timestamps by time. Only `missing` matches an absent cell. A cell of a different type than `value` never matches, **including under `!=`**. For example, `{"column": "age", "cmp": "!=", "value": 30}` skips rows without `age` and rows where `age` is a string.
+Numbers compare numerically, strings byte by byte, booleans with `false` before `true`. Only `missing` matches an absent cell. A cell of a different type than `value` never matches, **including under `!=`**. For example, `{"column": "age", "cmp": "!=", "value": 30}` skips rows without `age` and rows where `age` is a string.
 
 **Example request**
 
@@ -211,7 +214,7 @@ Numbers compare numerically, strings byte by byte, booleans with `false` before 
 
 **Response 200**
 
-`rows` is in row key order. Each item holds the row's `key` and its selected columns in `row`.
+`rows` is in row key order, descending with `reverse`. Each item holds the row's `key` and its selected columns in `row`.
 
 ```json
 {
