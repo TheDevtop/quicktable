@@ -54,7 +54,8 @@ func run() error {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
 	if *token == "" {
-		slog.Warn("bearer token not set, this is insecure")
+		slog.Error("bearer token not set, use -t")
+		return errors.New("no bearer token")
 	}
 
 	slog.Info("starting quicktable server", "addr", *addr, "inMemory", *inMemory, "dir", *dataDir)

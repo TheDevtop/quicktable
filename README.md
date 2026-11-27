@@ -35,7 +35,7 @@ scan, get, values, query, batch and incr.
 | `-a` | `:16000` | Listen address |
 | `-d` | `./data` | Storage directory |
 | `-m` | | Keep the store in memory only |
-| `-t` | | Bearer token required on every request |
+| `-t` | | Bearer token required on every request; the server will not start without it |
 | `-v` | | Debug logging |
 
 	curl -H 'Authorization: Bearer secret' \
