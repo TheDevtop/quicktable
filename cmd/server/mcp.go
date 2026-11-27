@@ -12,7 +12,7 @@ import (
 	"github.com/TheDevtop/quicktable/internal/mustang"
 )
 
-const mcpVersion = "0.4.0"
+const mcpVersion = "1.0.0"
 
 // RegisterMCPRoutes serves every endpoint as tool qt_<name> over Streamable HTTP at /mcp.
 // The server only offers tools, so it keeps no sessions and opens no streams:
